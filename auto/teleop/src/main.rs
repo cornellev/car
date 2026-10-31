@@ -1,5 +1,5 @@
 //! Drive the car from ackermann commands on `cev/commands/control`.
-//! Shows the wheel rpm the pico reports.
+//! Shows serial telemetry and publishes wheel rotations/s and steering heading in degrees.
 //!
 //! usage: teleop [--dry-run] [serial port]
 //! --dry-run prints the commands instead of sending them.
@@ -16,6 +16,16 @@ use serialport::SerialPort;
 const DEFAULT_PORT: &str = "/dev/serial/by-id/usb-Raspberry_Pi_Pico_505374175A8A7018-if00";
 const SEND_PERIOD: Duration = Duration::from_millis(20); // 50 Hz, well inside the firmware's 200 ms timeout
 const REOPEN_PERIOD: Duration = Duration::from_secs(1);
+
+// Topic names retain the rpm suffix; payloads are JSON floats in rotations/second.
+const RIGHT_WHEEL_KEY: &str = "cev/sensors/wheels/right_rpm";
+const LEFT_WHEEL_KEY: &str = "cev/sensors/wheels/left_rpm";
+const STEERING_ANGLE_KEY: &str = "cev/sensors/steering/steering_angle";
+
+// TODO: calibrate the steering linkage and direction. Arbitrary placeholder:
+// +/-900 pulses -> +/-45 degrees, boot center = 0, positive assumed counterclockwise.
+// Negate this constant if positive pulse counts turn clockwise.
+const STEERING_DEGREES_PER_PULSE: f32 = 45.0 / 900.0;
 
 const MAX_FRAME_LEN: usize = 32; // longer runs without a 0x00 are garbage
 
@@ -38,19 +48,19 @@ fn open_port(path: &str) -> Option<Box<dyn SerialPort>> {
 }
 
 // reads whatever has arrived without blocking, splits it into frames on 0x00,
-// and returns the newest valid telemetry (left rpm, right rpm)
+// and returns the newest valid telemetry (left rpm, right rpm, steering pulses)
 fn read_telemetry(
     port: &mut dyn SerialPort,
     rx: &mut Vec<u8>,
-) -> std::io::Result<Option<(f32, f32)>> {
+) -> std::io::Result<Option<(f32, f32, i32)>> {
     let mut incoming = vec![0; port.bytes_to_read()? as usize];
     port.read_exact(&mut incoming)?;
 
     let mut latest = None;
     for byte in incoming {
         if byte == 0x00 {
-            if let Some(rpm) = protocol::decode_telemetry(rx) {
-                latest = Some(rpm);
+            if let Some(telemetry) = protocol::decode_telemetry(rx) {
+                latest = Some(telemetry);
             }
             rx.clear();
         } else if rx.len() < MAX_FRAME_LEN {
@@ -82,6 +92,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     let session = zenoh::open(zenoh::Config::default()).await.unwrap();
     let ack_sub = session.declare_subscriber(config::ACKERMANN_KEY).await?;
+    let right_wheel_pub = session.declare_publisher(RIGHT_WHEEL_KEY).await?;
+    let left_wheel_pub = session.declare_publisher(LEFT_WHEEL_KEY).await?;
+    let steering_heading_pub = session.declare_publisher(STEERING_ANGLE_KEY).await?;
 
     loop {
         tokio::select! {
@@ -127,8 +140,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     if let Some(p) = port.as_mut() {
                         match read_telemetry(p.as_mut(), &mut rx) {
                             // one line, rewritten in place
-                            Ok(Some((left, right))) => {
-                                eprint!("\rrpm  left {left:7.1}  right {right:7.1}  ")
+                            Ok(Some((left, right, position))) => {
+                                let heading = position as f32 * STEERING_DEGREES_PER_PULSE;
+                                if let Err(e) = steering_heading_pub
+                                    .put(heading.to_string())
+                                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                    .await
+                                {
+                                    eprintln!("\nsteering heading publish failed: {e}");
+                                }
+                                eprint!("\rrpm  left {left:7.1}  right {right:7.1}  steering {position:7} pulses ({heading:6.1} deg)  ");
+                                for (publisher, rpm) in [(&right_wheel_pub, right), (&left_wheel_pub, left)] {
+                                    if let Err(e) = publisher
+                                        .put((rpm / 60.0).to_string())
+                                        .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                                        .await
+                                    {
+                                        eprintln!("\nwheel telemetry publish failed: {e}");
+                                    }
+                                }
                             }
                             Ok(None) => {}
                             Err(e) => {

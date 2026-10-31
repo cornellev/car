@@ -53,7 +53,7 @@ constexpr size_t RPM_WINDOW_PERIODS = 5;
 
 constexpr float DRIVETRAIN_PWM_FREQ_HZ = 2'000.0f;
 constexpr float STEPPER_MAX_FREQ_HZ = 17'500.0f;
-constexpr int32_t STEERING_HALF_RANGE_STEPS = 900;  // +/-90 degrees at 8,000 pulses/rev
+constexpr int32_t STEERING_HALF_RANGE_STEPS = 900;  // pulses from center to either limit
 constexpr float STEPPER_ACCELERATION = 40'000.0f;  // steps/s^2; applies to acceleration and braking
 constexpr uint STEPPER_PULSE_US = 3;  // DM542T: pulse high and low must each last at least 2.5 us
 constexpr uint STEPPER_DIR_SETUP_US = 5;     // DM542T: dir must lead the pulse edge by at least 5 us
@@ -222,7 +222,8 @@ void stop_all() {
 // decoded frame: [type u8][payload], all multi-byte values are little-endian
 //   jetson -> pico  MSG_DRIVE      0x01  f32 steering position [-1, 1], f32 drivetrain speed [-1, 1]
 // steering: -1 = -half range, 0 = boot position (center), +1 = +half range
-//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rpm, f32 right rpm, every TELEMETRY_PERIOD_MS
+//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rpm, f32 right rpm, i32 steering pulses, every TELEMETRY_PERIOD_MS
+// steering pulses count emitted steps relative to boot (zero), signed by direction
 // rpm is always >= 0: the sensors count magnets going by, not which way the wheel turns
 
 static_assert(std::endian::native == std::endian::little, "frames are little-endian, same as the RP2040");
@@ -230,7 +231,7 @@ static_assert(std::endian::native == std::endian::little, "frames are little-end
 constexpr uint8_t MSG_DRIVE = 0x01;
 constexpr uint8_t MSG_TELEMETRY = 0x02;
 constexpr size_t DRIVE_FRAME_LEN = 1 + 2 * sizeof(float);
-constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float);
+constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float) + sizeof(int32_t);
 constexpr size_t MAX_ENCODED_LEN = 32;     // longer frames are garbage and get dropped
 constexpr uint32_t COMMAND_TIMEOUT_MS = 200;  // stop every motor if no valid command arrives for this long
 
@@ -289,6 +290,13 @@ void send_telemetry(float left_rpm, float right_rpm) {
     std::array<uint8_t, TELEMETRY_FRAME_LEN> frame{MSG_TELEMETRY};
     write_f32(std::span(frame).subspan<1, sizeof(float)>(), left_rpm);
     write_f32(std::span(frame).subspan<1 + sizeof(float), sizeof(float)>(), right_rpm);
+    int32_t position;
+    {
+        const SteeringIrqBlock block;
+        position = steering_pulses.position();
+    }
+    std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(int32_t)>>(position),
+                      frame.begin() + 1 + 2 * sizeof(float));
 
     std::array<uint8_t, cobs::max_encoded_size(TELEMETRY_FRAME_LEN) + 1> encoded;
     size_t len = cobs::encode(frame, encoded);
