@@ -1,0 +1,4 @@
+# Arg lists named from cars/<car>/car.toml (`profile = "<name>"`). Cargo does not read this file.
+
+[dry-run]
+args = ["--dry-run"]
