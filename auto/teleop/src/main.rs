@@ -22,10 +22,10 @@ const RIGHT_WHEEL_KEY: &str = "cev/sensors/wheels/right_rpm";
 const LEFT_WHEEL_KEY: &str = "cev/sensors/wheels/left_rpm";
 const STEERING_ANGLE_KEY: &str = "cev/sensors/steering/steering_angle";
 
-// TODO: calibrate the steering linkage and direction. Arbitrary placeholder:
-// +/-900 pulses -> +/-45 degrees, boot center = 0, positive assumed counterclockwise.
-// Negate this constant if positive pulse counts turn clockwise.
-const STEERING_DEGREES_PER_PULSE: f32 = 45.0 / 900.0;
+// TODO: calibrate the steering linkage. Placeholder scale: +/-900 pulses -> +/-45 degrees,
+// boot center = 0. On merceves a positive Pico command and positive pulses both turn
+// clockwise (right), so both are negated to keep REP-103 positive = left.
+const STEERING_DEGREES_PER_PULSE: f32 = -45.0 / 900.0;
 
 const MAX_FRAME_LEN: usize = 32; // longer runs without a 0x00 are garbage
 
@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         rx.clear();
                     }
 
-                    let steering = (ackermann.steering_angle as f32);
+                    let steering = -(ackermann.steering_angle as f32);
                     let drivetrain = ackermann.speed as f32;
 
                     if let Some(p) = port.as_mut()
