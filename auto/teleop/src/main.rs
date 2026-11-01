@@ -128,7 +128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         rx.clear();
                     }
 
-                    let steering = -(ackermann.steering_angle as f32);
+                    let steering = (ackermann.steering_angle as f32);
                     let drivetrain = ackermann.speed as f32;
 
                     if let Some(p) = port.as_mut()
