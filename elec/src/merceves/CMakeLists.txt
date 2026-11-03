@@ -1,4 +1,4 @@
-add_board(hardware_pwm hardware_adc)
+add_board(hardware_pwm hardware_adc hardware_i2c)
 
 # drop telemetry after 1 ms of a full usb buffer instead of the default 500 ms, which would
 # stall the main loop (and trip the command timeout) whenever the host isn't reading

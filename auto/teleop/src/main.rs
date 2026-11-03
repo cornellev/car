@@ -4,9 +4,9 @@
 //! usage: teleop [--dry-run] [serial port]
 //! --dry-run prints the commands instead of sending them.
 
-mod protocol;
-mod config;
 mod ackermann;
+mod config;
+mod protocol;
 
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -48,11 +48,11 @@ fn open_port(path: &str) -> Option<Box<dyn SerialPort>> {
 }
 
 // reads whatever has arrived without blocking, splits it into frames on 0x00,
-// and returns the newest valid telemetry (left rpm, right rpm, steering pulses)
+// and returns the newest valid telemetry, including the raw encoder sample
 fn read_telemetry(
     port: &mut dyn SerialPort,
     rx: &mut Vec<u8>,
-) -> std::io::Result<Option<(f32, f32, i32)>> {
+) -> std::io::Result<Option<protocol::Telemetry>> {
     let mut incoming = vec![0; port.bytes_to_read()? as usize];
     port.read_exact(&mut incoming)?;
 
@@ -140,7 +140,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     if let Some(p) = port.as_mut() {
                         match read_telemetry(p.as_mut(), &mut rx) {
                             // one line, rewritten in place
-                            Ok(Some((left, right, position))) => {
+                            Ok(Some(telemetry)) => {
+                                let left = telemetry.left_rpm;
+                                let right = telemetry.right_rpm;
+                                let position = telemetry.steering_pulses;
+                                let encoder = match telemetry.encoder {
+                                    Some(sample) => format!("raw={} status=0x{:02X}", sample.raw, sample.status),
+                                    None => "I2C failed".to_string(),
+                                };
                                 let heading = position as f32 * STEERING_DEGREES_PER_PULSE;
                                 if let Err(e) = steering_heading_pub
                                     .put(heading.to_string())
@@ -149,7 +156,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 {
                                     eprintln!("\nsteering heading publish failed: {e}");
                                 }
-                                eprint!("\rrpm  left {left:7.1}  right {right:7.1}  steering {position:7} pulses ({heading:6.1} deg)  ");
+                                eprint!("\rrpm  left {left:7.1}  right {right:7.1}  steering {position:7} pulses ({heading:6.1} deg)  encoder {encoder:24}  ");
                                 for (publisher, rpm) in [(&right_wheel_pub, right), (&left_wheel_pub, left)] {
                                     if let Err(e) = publisher
                                         .put((rpm / 60.0).to_string())

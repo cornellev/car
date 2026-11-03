@@ -8,6 +8,7 @@
 
 #include "hardware/clocks.h"
 #include "hardware/irq.h"
+#include "hardware/i2c.h"
 #include "hardware/pwm.h"
 #include "pico/stdlib.h"
 
@@ -217,12 +218,49 @@ void stop_all() {
     }
 }
 
+// ---- AS5600 encoder: telemetry only, powered from Pico 3V3 OUT ----
+constexpr uint ENCODER_SDA_PIN = 2;  // I2C1, physical pin 4
+constexpr uint ENCODER_SCL_PIN = 3;  // I2C1, physical pin 5
+constexpr uint ENCODER_VCC_PIN = 4;  // Power, physical pin 6
+constexpr uint ENCODER_I2C_HZ = 100'000;
+constexpr uint ENCODER_TIMEOUT_US = 1'000;
+constexpr uint8_t ENCODER_ADDRESS = 0x36;
+
+struct EncoderSample {
+    uint16_t raw = 0;
+    uint8_t status = 0;
+    bool read_ok = false;  // Transport success, independent of magnetic-field warnings.
+};
+
+void init_encoder() {
+    i2c_init(i2c1, ENCODER_I2C_HZ);
+    gpio_set_function(ENCODER_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(ENCODER_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(ENCODER_SDA_PIN);
+    gpio_pull_up(ENCODER_SCL_PIN);
+    gpio_init(ENCODER_VCC_PIN);
+    gpio_set_dir(ENCODER_VCC_PIN, GPIO_OUT);
+    gpio_put(ENCODER_VCC_PIN, 1);
+}
+
+EncoderSample read_encoder() {
+    constexpr uint8_t status_register = 0x0B;
+    std::array<uint8_t, 3> data{};  // STATUS, RAW_ANGLE high, RAW_ANGLE low
+    if (i2c_write_timeout_us(i2c1, ENCODER_ADDRESS, &status_register, 1, true,
+                             ENCODER_TIMEOUT_US) != 1 ||
+        i2c_read_timeout_us(i2c1, ENCODER_ADDRESS, data.data(), data.size(), false,
+                            ENCODER_TIMEOUT_US) != static_cast<int>(data.size())) return {};
+    return {.raw = static_cast<uint16_t>(((data[1] & 0x0F) << 8) | data[2]),
+            .status = data[0], .read_ok = true};
+}
+
 // ---- serial protocol ----
 // every frame is COBS-encoded and ends in a 0x00 byte, so a dropped byte only loses one frame
 // decoded frame: [type u8][payload], all multi-byte values are little-endian
 //   jetson -> pico  MSG_DRIVE      0x01  f32 steering position [-1, 1], f32 drivetrain speed [-1, 1]
 // steering: -1 = -half range, 0 = boot position (center), +1 = +half range
-//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rpm, f32 right rpm, i32 steering pulses, every TELEMETRY_PERIOD_MS
+//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rpm, f32 right rpm, i32 steering pulses, u16 encoder raw, u8 status, u8 read_ok
+// every TELEMETRY_PERIOD_MS; encoder raw/status are zero on I2C failure
 // steering pulses count emitted steps relative to boot (zero), signed by direction
 // rpm is always >= 0: the sensors count magnets going by, not which way the wheel turns
 
@@ -231,7 +269,7 @@ static_assert(std::endian::native == std::endian::little, "frames are little-end
 constexpr uint8_t MSG_DRIVE = 0x01;
 constexpr uint8_t MSG_TELEMETRY = 0x02;
 constexpr size_t DRIVE_FRAME_LEN = 1 + 2 * sizeof(float);
-constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float) + sizeof(int32_t);
+constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float) + sizeof(int32_t) + 4;
 constexpr size_t MAX_ENCODED_LEN = 32;     // longer frames are garbage and get dropped
 constexpr uint32_t COMMAND_TIMEOUT_MS = 200;  // stop every motor if no valid command arrives for this long
 
@@ -298,6 +336,13 @@ void send_telemetry(float left_rpm, float right_rpm) {
     std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(int32_t)>>(position),
                       frame.begin() + 1 + 2 * sizeof(float));
 
+    const EncoderSample encoder = read_encoder();
+    constexpr size_t encoder_offset = 1 + 2 * sizeof(float) + sizeof(int32_t);
+    frame[encoder_offset] = static_cast<uint8_t>(encoder.raw & 0xFF);
+    frame[encoder_offset + 1] = static_cast<uint8_t>(encoder.raw >> 8);
+    frame[encoder_offset + 2] = encoder.status;
+    frame[encoder_offset + 3] = static_cast<uint8_t>(encoder.read_ok);
+
     std::array<uint8_t, cobs::max_encoded_size(TELEMETRY_FRAME_LEN) + 1> encoded;
     size_t len = cobs::encode(frame, encoded);
     encoded[len++] = 0;
@@ -342,6 +387,7 @@ int main() {
     }
     stop_all();
 
+    init_encoder();
     cev::rpm_init(RPM_LEFT_PIN, RPM_RIGHT_PIN);
     cev::Interval telemetry{.period_ms = TELEMETRY_PERIOD_MS};
     absolute_time_t last_telemetry = get_absolute_time();
