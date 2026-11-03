@@ -1,21 +1,24 @@
 # use powershell on windows
 set windows-shell := ["powershell.exe", "-NoProfile", "-Command"]
 
+# run from the repo root, where CMakePresets.json lives
+set working-directory := "../.."
+
 [private]
 default:
-    @just --list
+    @just --justfile {{ source_file() }} --list
 
 configure:
-    cmake -S . -B build -G Ninja
+    cmake --preset host
 
 build: configure
-    cmake --build build
+    cmake --build --preset host
 
 test: build
-    ctest --test-dir build --output-on-failure
+    ctest --preset host
 
 clean:
-    cmake -E rm -rf build
+    cmake -E rm -rf build/host
 
 # create a virtual CAN-FD interface for the socketcan tests and chuds_demo
 [linux]
@@ -29,18 +32,10 @@ vcan-up iface="vcan0":
 # install a service that brings can0 up at the bus settings in frame.hpp whenever it appears
 # rerun after changing frame.hpp
 [linux]
-install-can: build
-    sudo install -m 755 build/tools/can_link_args /usr/local/bin/can_link_args
-    sudo install -m 644 tools/can0-up.service /etc/systemd/system/can0-up.service
+install-can: configure
+    cmake --build --preset host --target can_link_args
+    sudo install -m 755 build/host/cev-lib/chuds/tools/can_link_args /usr/local/bin/can_link_args
+    sudo install -m 644 cev-lib/chuds/tools/can0-up.service /etc/systemd/system/can0-up.service
     sudo systemctl daemon-reload
     sudo systemctl enable can0-up.service
     if ip link show can0 >/dev/null 2>&1; then sudo systemctl restart can0-up.service; fi
-
-# lint every file the build compiles, except fetched and generated code
-[unix]
-lint: configure
-    #!/usr/bin/env bash
-    set -euo pipefail
-    # run-clang-tidy prints each file's full command and a "N warnings generated" tally; drop both
-    run-clang-tidy -p build -quiet '^((?!/build/).)*$' 2>&1 \
-        | { grep -vE '^\[[0-9]+/[0-9]+\]\[|[0-9]+ warnings generated\.$' || true; } | cat -s

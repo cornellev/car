@@ -1,0 +1,28 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "firmware",
+      "displayName": "RP2040 firmware",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/firmware",
+      "cacheVariables": { "CEV_BUILD": "firmware" }
+    },
+    {
+      "name": "host",
+      "displayName": "Host (chuds tests, and on Linux its examples and tools)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/host",
+      "cacheVariables": { "CEV_BUILD": "host", "CMAKE_BUILD_TYPE": "Debug" },
+      "condition": { "type": "notEquals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "firmware", "configurePreset": "firmware" },
+    { "name": "host", "configurePreset": "host" }
+  ],
+  "testPresets": [
+    { "name": "host", "configurePreset": "host", "output": { "outputOnFailure": true } }
+  ]
+}
