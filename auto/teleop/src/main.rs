@@ -1,5 +1,6 @@
 //! Drive the car from ackermann commands on `cev/commands/control`.
-//! Shows serial telemetry and publishes wheel rotations/s and steering heading in degrees.
+//! Commands are radians and m/s. The Pico wants a steering position and a duty, both in [-1, 1].
+//! Telemetry comes back as wheel rot/s and an encoder count, published as rot/s and degrees.
 //!
 //! usage: teleop [--dry-run] [serial port]
 //! --dry-run prints the commands instead of sending them.
@@ -22,10 +23,32 @@ const RIGHT_WHEEL_KEY: &str = "cev/sensors/wheels/right_rpm";
 const LEFT_WHEEL_KEY: &str = "cev/sensors/wheels/left_rpm";
 const STEERING_ANGLE_KEY: &str = "cev/sensors/steering/steering_angle";
 
-// TODO: calibrate the steering linkage. Placeholder scale: +/-900 pulses -> +/-45 degrees,
-// boot center = 0. On merceves a positive Pico command and positive pulses both turn
-// clockwise (right), so both are negated to keep REP-103 positive = left.
-const STEERING_DEGREES_PER_PULSE: f32 = -45.0 / 900.0;
+// shortcut: 900 firmware steps span the measured 13.5 deg stop. Replace both once counted.
+const STEERING_LIMIT_DEG: f32 = 13.5;
+const HALF_RANGE_STEPS: f32 = 900.0;
+const PULSES_PER_DEG: f32 = HALF_RANGE_STEPS / STEERING_LIMIT_DEG;
+// Full-scale duty is about 2 m/s. Feedforward only; a speed loop comes later.
+const MAX_SPEED_MPS: f32 = 2.0;
+// Encoder center and counts per revolution. Wrap is 0 until the magnetic encoder is wired,
+// so only COUNTS_PER_DEG is used. Positive counts are clockwise (right).
+const CENTER_COUNTS: f32 = 0.0;
+const ENCODER_COUNTS_PER_REV: f32 = 0.0;
+const COUNTS_PER_DEG: f32 = PULSES_PER_DEG;
+
+fn steering_command(angle_rad: f32) -> f32 {
+    let degrees = angle_rad.to_degrees();
+    // A positive Pico position turns clockwise (right). REP-103 positive is left.
+    (-degrees * PULSES_PER_DEG / HALF_RANGE_STEPS).clamp(-1.0, 1.0)
+}
+
+fn drivetrain_command(speed_mps: f32) -> f32 {
+    (speed_mps / MAX_SPEED_MPS).clamp(-1.0, 1.0)
+}
+
+fn steering_degrees(raw: i32, wrap: i32) -> f32 {
+    let counts = wrap as f32 * ENCODER_COUNTS_PER_REV + raw as f32 - CENTER_COUNTS;
+    -(counts / COUNTS_PER_DEG)
+}
 
 const MAX_FRAME_LEN: usize = 32; // longer runs without a 0x00 are garbage
 
@@ -48,11 +71,11 @@ fn open_port(path: &str) -> Option<Box<dyn SerialPort>> {
 }
 
 // reads whatever has arrived without blocking, splits it into frames on 0x00,
-// and returns the newest valid telemetry (left rpm, right rpm, steering pulses)
+// and returns the newest valid telemetry (left rot/s, right rot/s, encoder raw, encoder wrap)
 fn read_telemetry(
     port: &mut dyn SerialPort,
     rx: &mut Vec<u8>,
-) -> std::io::Result<Option<(f32, f32, i32)>> {
+) -> std::io::Result<Option<(f32, f32, i32, i32)>> {
     let mut incoming = vec![0; port.bytes_to_read()? as usize];
     port.read_exact(&mut incoming)?;
 
@@ -128,8 +151,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                         rx.clear();
                     }
 
-                    let steering = -(ackermann.steering_angle as f32);
-                    let drivetrain = ackermann.speed as f32;
+                    let steering = steering_command(ackermann.steering_angle as f32);
+                    let drivetrain = drivetrain_command(ackermann.speed as f32);
 
                     if let Some(p) = port.as_mut()
                         && let Err(e) = p.write_all(&protocol::encode_drive(steering, drivetrain))
@@ -140,8 +163,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     if let Some(p) = port.as_mut() {
                         match read_telemetry(p.as_mut(), &mut rx) {
                             // one line, rewritten in place
-                            Ok(Some((left, right, position))) => {
-                                let heading = position as f32 * STEERING_DEGREES_PER_PULSE;
+                            Ok(Some((left, right, raw, wrap))) => {
+                                let heading = steering_degrees(raw, wrap);
                                 if let Err(e) = steering_heading_pub
                                     .put(heading.to_string())
                                     .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
@@ -149,10 +172,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                 {
                                     eprintln!("\nsteering heading publish failed: {e}");
                                 }
-                                eprint!("\rrpm  left {left:7.1}  right {right:7.1}  steering {position:7} pulses ({heading:6.1} deg)  ");
-                                for (publisher, rpm) in [(&right_wheel_pub, right), (&left_wheel_pub, left)] {
+                                eprint!("\rrps  left {left:7.2}  right {right:7.2}  steering raw {raw:7} wrap {wrap:3} ({heading:6.1} deg)  ");
+                                for (publisher, rps) in [(&right_wheel_pub, right), (&left_wheel_pub, left)] {
                                     if let Err(e) = publisher
-                                        .put((rpm / 60.0).to_string())
+                                        .put(rps.to_string())
                                         .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
                                         .await
                                     {
@@ -172,4 +195,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steering_command_is_left_positive_and_clamped() {
+        assert!(steering_command(0.0).abs() < 1e-6);
+        let full_left = steering_command(STEERING_LIMIT_DEG.to_radians());
+        assert!((full_left - (-1.0)).abs() < 1e-5, "{full_left}");
+        assert_eq!(steering_command(40.0_f32.to_radians()), -1.0);
+        assert_eq!(steering_command(-40.0_f32.to_radians()), 1.0);
+    }
+
+    #[test]
+    fn drivetrain_command_is_duty_at_two_meters_per_second() {
+        assert!((drivetrain_command(0.8) - 0.4).abs() < 1e-6);
+        assert_eq!(drivetrain_command(5.0), 1.0);
+        assert_eq!(drivetrain_command(-5.0), -1.0);
+    }
+
+    #[test]
+    fn steering_degrees_negates_clockwise_counts() {
+        let steps = HALF_RANGE_STEPS as i32;
+        let degrees = steering_degrees(steps, 0);
+        assert!((degrees - (-STEERING_LIMIT_DEG)).abs() < 1e-4, "{degrees}");
+        assert!(steering_degrees(-steps, 0) > 0.0);
+    }
 }

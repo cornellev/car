@@ -14,8 +14,10 @@ const SEND_PERIOD: Duration = Duration::from_millis(20); // match teleop's seria
 const COMMAND_KEY: &str = "cev/commands/control"; // teleop's config::ACKERMANN_KEY
 
 const STICK_DEADZONE: f32 = 0.1;
-const MAX_STEERING: f32 = 1.0;
-const MAX_DRIVETRAIN: f32 = 0.6; // keep it slow while testing
+// Same units teleop consumes: radians and m/s. Full stick is the 13.5 deg stop
+// and 0.6 of the 2 m/s full-scale speed, so the stick still feels like the old 0.6 duty cap.
+const MAX_STEERING_RAD: f32 = 13.5 * std::f32::consts::PI / 180.0;
+const MAX_SPEED_MPS: f32 = 0.6 * 2.0;
 
 #[derive(Serialize)]
 struct Command {
@@ -34,8 +36,8 @@ fn deadzone(value: f32) -> f32 {
 
 fn axes_to_command(stick_x: f32, stick_y: f32) -> Command {
     Command {
-        steering_angle: (deadzone(stick_x) * MAX_STEERING) as f64,
-        speed: (deadzone(stick_y) * MAX_DRIVETRAIN) as f64,
+        steering_angle: (deadzone(stick_x) * MAX_STEERING_RAD) as f64,
+        speed: (deadzone(stick_y) * MAX_SPEED_MPS) as f64,
     }
 }
 
@@ -91,8 +93,8 @@ mod tests {
         assert_eq!(stopped.speed, 0.0);
 
         let full = axes_to_command(1.0, 1.0);
-        assert_eq!(full.steering_angle, 1.0);
-        assert!((full.speed - 0.6).abs() < 1e-6);
+        assert!((full.steering_angle - MAX_STEERING_RAD as f64).abs() < 1e-9);
+        assert!((full.speed - 1.2).abs() < 1e-6);
 
         assert_eq!(
             serde_json::to_string(&axes_to_command(0.0, 0.0)).unwrap(),

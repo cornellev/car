@@ -222,16 +222,17 @@ void stop_all() {
 // decoded frame: [type u8][payload], all multi-byte values are little-endian
 //   jetson -> pico  MSG_DRIVE      0x01  f32 steering position [-1, 1], f32 drivetrain speed [-1, 1]
 // steering: -1 = -half range, 0 = boot position (center), +1 = +half range
-//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rpm, f32 right rpm, i32 steering pulses, every TELEMETRY_PERIOD_MS
-// steering pulses count emitted steps relative to boot (zero), signed by direction
-// rpm is always >= 0: the sensors count magnets going by, not which way the wheel turns
+//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rot/s, f32 right rot/s, i32 encoder raw, i32 encoder wrap
+// rot/s is always >= 0: the sensors count magnets going by, not which way the wheel turns
+// raw/wrap: the magnetic encoder is not wired yet. raw is the stepper pulse count from boot
+// (positive clockwise) and wrap is 0. Teleop turns that pair into degrees.
 
 static_assert(std::endian::native == std::endian::little, "frames are little-endian, same as the RP2040");
 
 constexpr uint8_t MSG_DRIVE = 0x01;
 constexpr uint8_t MSG_TELEMETRY = 0x02;
 constexpr size_t DRIVE_FRAME_LEN = 1 + 2 * sizeof(float);
-constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float) + sizeof(int32_t);
+constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float) + 2 * sizeof(int32_t);
 constexpr size_t MAX_ENCODED_LEN = 32;     // longer frames are garbage and get dropped
 constexpr uint32_t COMMAND_TIMEOUT_MS = 200;  // stop every motor if no valid command arrives for this long
 
@@ -286,17 +287,21 @@ private:
 };
 
 // if the host isn't reading, the frame (or its end) is dropped instead of blocking; see CMakeLists.txt
-void send_telemetry(float left_rpm, float right_rpm) {
+void send_telemetry(float left_rps, float right_rps) {
     std::array<uint8_t, TELEMETRY_FRAME_LEN> frame{MSG_TELEMETRY};
-    write_f32(std::span(frame).subspan<1, sizeof(float)>(), left_rpm);
-    write_f32(std::span(frame).subspan<1 + sizeof(float), sizeof(float)>(), right_rpm);
+    write_f32(std::span(frame).subspan<1, sizeof(float)>(), left_rps);
+    write_f32(std::span(frame).subspan<1 + sizeof(float), sizeof(float)>(), right_rps);
     int32_t position;
     {
         const SteeringIrqBlock block;
         position = steering_pulses.position();
     }
+    // shortcut: wrap stays 0 until the magnetic encoder replaces the stepper count
+    const int32_t encoder_wrap = 0;
     std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(int32_t)>>(position),
                       frame.begin() + 1 + 2 * sizeof(float));
+    std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(int32_t)>>(encoder_wrap),
+                      frame.begin() + 1 + 2 * sizeof(float) + sizeof(int32_t));
 
     std::array<uint8_t, cobs::max_encoded_size(TELEMETRY_FRAME_LEN) + 1> encoded;
     size_t len = cobs::encode(frame, encoded);
@@ -382,7 +387,7 @@ int main() {
             const float seconds = static_cast<float>(absolute_time_diff_us(last_telemetry, now)) / 1e6f;
             last_telemetry = now;
             const RpmWindow::Rpm rpm = rpm_window.add(cev::rpm_take(), seconds);
-            send_telemetry(rpm.left, rpm.right);
+            send_telemetry(rpm.left / 60.0f, rpm.right / 60.0f);
         }
 
         // led on while commands are arriving

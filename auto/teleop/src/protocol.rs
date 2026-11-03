@@ -5,7 +5,7 @@
 //! There's no checksum: USB CRC-checks every packet and resends bad ones.
 //!
 //! - jetson -> pico, `MSG_DRIVE`: f32 steering position [-1, 1], f32 drivetrain speed [-1, 1]
-//! - pico -> jetson, `MSG_TELEMETRY`: f32 left rpm, f32 right rpm, i32 steering pulses relative to boot
+//! - pico -> jetson, `MSG_TELEMETRY`: f32 left rot/s, f32 right rot/s, i32 encoder raw, i32 encoder wrap
 
 pub const MSG_DRIVE: u8 = 0x01;
 pub const MSG_TELEMETRY: u8 = 0x02;
@@ -21,17 +21,19 @@ pub fn encode_drive(steering: f32, drivetrain: f32) -> Vec<u8> {
     out
 }
 
-/// Decodes one telemetry frame into (left rpm, right rpm, steering pulses). Pass the bytes before a 0x00, without it.
-pub fn decode_telemetry(encoded: &[u8]) -> Option<(f32, f32, i32)> {
+/// Decodes one telemetry frame into (left rot/s, right rot/s, encoder raw, encoder wrap).
+/// Pass the bytes before a 0x00, without it.
+pub fn decode_telemetry(encoded: &[u8]) -> Option<(f32, f32, i32, i32)> {
     let frame = cobs::decode_vec(encoded).ok()?;
-    if frame.len() != 13 || frame[0] != MSG_TELEMETRY {
+    if frame.len() != 17 || frame[0] != MSG_TELEMETRY {
         return None;
     }
 
     let left = f32::from_le_bytes(frame[1..5].try_into().ok()?);
     let right = f32::from_le_bytes(frame[5..9].try_into().ok()?);
-    let position = i32::from_le_bytes(frame[9..13].try_into().ok()?);
-    Some((left, right, position))
+    let raw = i32::from_le_bytes(frame[9..13].try_into().ok()?);
+    let wrap = i32::from_le_bytes(frame[13..17].try_into().ok()?);
+    Some((left, right, raw, wrap))
 }
 
 #[cfg(test)]
@@ -52,12 +54,22 @@ mod tests {
     #[test]
     fn telemetry_round_trip() {
         let mut frame = vec![MSG_TELEMETRY];
-        frame.extend_from_slice(&120.5f32.to_le_bytes());
-        frame.extend_from_slice(&(-3.0f32).to_le_bytes());
+        frame.extend_from_slice(&1.5f32.to_le_bytes());
+        frame.extend_from_slice(&(-0.25f32).to_le_bytes());
         frame.extend_from_slice(&(-1234i32).to_le_bytes());
+        frame.extend_from_slice(&2i32.to_le_bytes());
         let encoded = cobs::encode_vec(&frame);
 
-        assert_eq!(decode_telemetry(&encoded), Some((120.5, -3.0, -1234)));
+        assert_eq!(decode_telemetry(&encoded), Some((1.5, -0.25, -1234, 2)));
+    }
+
+    #[test]
+    fn telemetry_rejects_rpm_and_pulse_layout() {
+        let mut frame = vec![MSG_TELEMETRY];
+        frame.extend_from_slice(&120.5f32.to_le_bytes());
+        frame.extend_from_slice(&3.0f32.to_le_bytes());
+        frame.extend_from_slice(&900i32.to_le_bytes());
+        assert_eq!(decode_telemetry(&cobs::encode_vec(&frame)), None);
     }
 
     #[test]

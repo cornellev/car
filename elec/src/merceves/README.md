@@ -23,17 +23,19 @@ timeout cancels motion: at most two pulses already loaded into the PWM still go 
 then the driver is disabled, preserving the step count. The next valid command resumes from that count. The drivetrain float still
 requests speed.
 
-`MSG_TELEMETRY` (`0x02`) returns little-endian `f32` left RPM, `f32` right
-RPM, then `i32` steering position in emitted pulses relative to boot, obtained
-from `SteeringPulses::position()`. The decoded frame is 13 bytes including the
-message type; COBS framing is unchanged. Firmware and teleop must both use this
-layout.
+`MSG_TELEMETRY` (`0x02`) returns little-endian `f32` left rot/s, `f32` right
+rot/s, then `i32` encoder raw and `i32` encoder wrap. The decoded frame is 17
+bytes including the message type; COBS framing is unchanged. Wheel speed is
+still counted from the magnet sensors and divided by 60 on the way out. The
+magnetic encoder is not wired yet: raw is the stepper pulse count from boot
+and wrap is 0. Firmware and teleop must both use this layout.
 
-Teleop publishes `cev/sensors/steering/steering_angle` as a JSON float in degrees,
-with boot center at zero and counterclockwise positive. Its temporary mapping
-assumes positive pulses turn counterclockwise and maps 900 pulses to 45 degrees.
-Calibrate `STEERING_DEGREES_PER_PULSE` in `auto/teleop/src/main.rs` before relying
-on the angle. This is an estimate from emitted pulses, not an angle sensor.
+Teleop publishes `cev/sensors/steering/steering_angle` as a JSON float in
+degrees, positive left. It treats 900 pulses as the measured 13.5 degree stop
+and negates the count, because positive pulses turn clockwise. Replace
+`PULSES_PER_DEG` and `COUNTS_PER_DEG` in `auto/teleop/src/main.rs` once the
+encoder is counted. Drive commands arriving as radians and m/s are scaled to
+the Pico's [-1, 1] position and duty, with 2 m/s at full duty.
 
 Run the host motion tests from this directory:
 
