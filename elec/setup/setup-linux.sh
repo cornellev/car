@@ -5,13 +5,18 @@
 # after this, build from elec/ with: just build
 set -euo pipefail
 
+# a root shell, like a container, has no sudo
+if [ "$(id -u)" -eq 0 ]; then
+    sudo() { "$@"; }
+fi
+
 if command -v apt-get >/dev/null; then
     sudo apt-get update
-    sudo apt-get install -y cmake ninja-build python3 curl libusb-1.0-0 g++
-    # apt's just is older than the 1.52 the justfiles need
-    curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | sudo bash -s -- --to /usr/local/bin --force
+    sudo apt-get install -y cmake ninja-build python3 curl ca-certificates libusb-1.0-0 g++
+    # debian 12 has no just package, and ubuntu 24.04's is 1.21, older than the 1.33 the justfiles need
+    curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | sudo bash -s -- --tag 1.58.0 --to /usr/local/bin --force
 elif command -v pacman >/dev/null; then
-    sudo pacman -S --needed --noconfirm cmake ninja python just libusb gcc
+    sudo pacman -Syu --needed --noconfirm cmake ninja python just libusb gcc
 else
     echo "no apt-get or pacman found. install the tools listed in elec/README.md by hand"
     exit 1

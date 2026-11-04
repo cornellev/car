@@ -1,22 +1,16 @@
-cmake_minimum_required(VERSION 3.21)
+# the rp2040 firmware, added by the root CMakeLists.txt in its firmware mode
 
-set(PICO_SDK_PATH ${CMAKE_CURRENT_LIST_DIR}/../vendor/pico-sdk)
-include(${CMAKE_CURRENT_LIST_DIR}/cmake/pinned_tools.cmake)
-include(${PICO_SDK_PATH}/external/pico_sdk_import.cmake)
+# a missing tinyusb submodule only warns in pico-sdk, and the boards would build without usb
+if(NOT TARGET pico_stdio_usb)
+    message(FATAL_ERROR "pico-sdk has no USB support because its tinyusb submodule is missing. Run "
+        "`git -C vendor/pico-sdk submodule update --init lib/tinyusb` from the repo root, then build again")
+endif()
 
-project(urban_concept_elec C CXX ASM)
-
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-pico_sdk_init()
-
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../cev-lib/RP2040_MCP251863_Driver rp2040_mcp251863)
-add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/../cev-lib/chuds chuds)
+string(REPLACE "." "\\." arm_re "${arm_version}")
+if(NOT CMAKE_C_COMPILER_VERSION MATCHES "^${arm_re}(\\.|$)")
+    message(FATAL_ERROR "arm-gcc is ${CMAKE_C_COMPILER_VERSION}, but the build pins ${arm_release} "
+        "(elec/cmake/pinned_tools.cmake). If the pin just changed, run `just clean` from elec/ and build again")
+endif()
 
 add_subdirectory(src/common)
 
@@ -29,11 +23,16 @@ function(add_board)
     target_link_libraries(${board} PRIVATE board_common pico_bootsel_via_double_reset ${ARGN})
     pico_enable_stdio_uart(${board} 0)
     pico_enable_stdio_usb(${board} 1)
-    pico_add_extra_outputs(${board})
-    # fail the build if the board links the heap allocator
+    # fail the build if the board links the heap allocator, before the .uf2 is written
     add_custom_command(TARGET ${board} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -DNM=${CMAKE_NM} -DELF=$<TARGET_FILE:${board}>
                 -P ${CMAKE_CURRENT_FUNCTION_LIST_DIR}/cmake/forbid_heap.cmake)
+    pico_add_extra_outputs(${board})
+    # pico_add_extra_outputs defines the picotool target the build found, in this folder
+    add_custom_target(flash_${board}
+        COMMAND picotool load -f -x $<TARGET_FILE_DIR:${board}>/${board}.uf2
+        DEPENDS ${board}
+        USES_TERMINAL)
 endfunction()
 
 # firmware inventory; add a board with an explicit line
