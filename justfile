@@ -30,8 +30,8 @@ test:
 # nix's clang-tidy wrapper adds host headers, so the firmware lint uses the unwrapped binary when there is one
 # lint every file the builds compile, except vendored and generated code
 # extra arguments go to run-clang-tidy, like ci's -warnings-as-errors='*'
-[unix]
 [positional-arguments]
+[unix]
 lint *args:
     #!/usr/bin/env bash
     set -euo pipefail

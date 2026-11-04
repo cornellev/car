@@ -1,4 +1,5 @@
-#include <stdio.h>
+#include <cstdint>
+#include <cstdio>
 
 #include "hardware/spi.h"
 #include "mcp251863.hpp"
@@ -38,13 +39,13 @@ int main() {
 
     mcp.begin();
 
-    uint8_t data0[8] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
-    uint8_t data1[8] = {0x00, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E};
-    uint8_t data2[8] = {0x00, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
-    uint32_t id0     = 0x001;
-    uint32_t id1     = 0x002;
-    uint32_t id2     = 0x003;
-    int count        = 0;
+    uint8_t data0[8]   = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+    uint8_t data1[8]   = {0x00, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E};
+    uint8_t data2[8]   = {0x00, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
+    const uint32_t id0 = 0x001;
+    const uint32_t id1 = 0x002;
+    const uint32_t id2 = 0x003;
+    int count          = 0;
 
     printf("Make it to here.\n");
 
@@ -91,7 +92,7 @@ int main() {
 
         // Polling information
         if (count % 10 == 0) {
-            Status s = mcp.getStatus().value();
+            const Status s = mcp.getStatus().value();
             printf("bus_off=%d tx_err=%d tx_count=%d\n", s.bus_off, s.tx_error_passive,
                    s.tx_error_count);
         }
