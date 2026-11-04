@@ -71,6 +71,8 @@ public:
         target_ = position_;
     }
 
+    void zero() { position_ = 0; target_ = 0; speed_squared_ = 0.0f; }
+
     int32_t position() const { return position_; }
 
 private:

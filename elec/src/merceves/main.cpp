@@ -16,6 +16,7 @@
 #include "common/interval.hpp"
 #include "common/rpm.hpp"
 #include "steering_motion.hpp"
+#include "steering_homing.hpp"
 #include "steering_pulses.hpp"
 
 namespace {
@@ -46,15 +47,15 @@ constexpr uint ONBOARD_LED_PIN = 25;
 // wheel-speed sensors, counted by pio (see common/rpm.pio)
 constexpr uint RPM_LEFT_PIN = 23;
 constexpr uint RPM_RIGHT_PIN = 24;
-constexpr float RPM_EDGES_PER_REV = 68.0f;  // magnets per wheel, from the old Merceves_Base firmware
+constexpr float WHEEL_EDGES_PER_REV = 68.0f;  // magnets per wheel, from the old Merceves_Base firmware
 constexpr uint32_t TELEMETRY_PERIOD_MS = 100;
-// rpm is averaged over the last few periods: each edge in the window is worth
-// 60 / (68 * 0.5 s) ~= 1.8 rpm, so a longer window reads smoother but lags more
-constexpr size_t RPM_WINDOW_PERIODS = 5;
+// rps is averaged over the last few periods: each edge in the window is worth
+// 1 / (68 * 0.5 s) ~= 0.029 rps, so a longer window reads smoother but lags more
+constexpr size_t RPS_WINDOW_PERIODS = 5;
 
 constexpr float DRIVETRAIN_PWM_FREQ_HZ = 2'000.0f;
 constexpr float STEPPER_MAX_FREQ_HZ = 17'500.0f;
-constexpr int32_t STEERING_HALF_RANGE_STEPS = 900;  // pulses from center to either limit
+constexpr int32_t STEERING_HALF_RANGE_STEPS = 800;  // pulses from center to either limit
 constexpr float STEPPER_ACCELERATION = 40'000.0f;  // steps/s^2; applies to acceleration and braking
 constexpr uint STEPPER_PULSE_US = 3;  // DM542T: pulse high and low must each last at least 2.5 us
 constexpr uint STEPPER_DIR_SETUP_US = 5;     // DM542T: dir must lead the pulse edge by at least 5 us
@@ -144,10 +145,8 @@ void init_motor(const SteeringMotor& motor) {
     irq_set_enabled(PWM_DEFAULT_IRQ_NUM(), true);
 }
 
-// [-1.0, 1.0]; -1 = -half range, 0 = boot position (center), +1 = +half range
-void steer_to(float position) {
-    const SteeringIrqBlock block;
-    steering_motion.set_target(position);
+// Caller holds SteeringIrqBlock while changing shared pulse state.
+void run_steering() {
     if (!gpio_get_out_level(steering.enable)) {
         // enable the driver right away, even for a centered target, and hold off stepping until it
         // settles. it then stays enabled to hold position until a timeout stops steering
@@ -166,6 +165,12 @@ void steer_to(float position) {
         pwm_clear_irq(slice);
         pwm_set_enabled(slice, true);
     }
+}
+
+void steer_to(float position) {
+    const SteeringIrqBlock block;
+    steering_motion.set_target(position);
+    run_steering();
 }
 
 // the at most two pulses already loaded into the PWM still go out, then the interrupt
@@ -218,7 +223,7 @@ void stop_all() {
     }
 }
 
-// ---- AS5600 encoder: telemetry only, powered from Pico 3V3 OUT ----
+// ---- AS5600 encoder: homing and telemetry, powered from Pico 3V3 OUT ----
 constexpr uint ENCODER_SDA_PIN = 2;  // I2C1, physical pin 4
 constexpr uint ENCODER_SCL_PIN = 3;  // I2C1, physical pin 5
 constexpr uint ENCODER_VCC_PIN = 4;  // Power, physical pin 6
@@ -254,22 +259,46 @@ EncoderSample read_encoder() {
             .status = data[0], .read_ok = true};
 }
 
+SteeringHoming homing;
+SteeringAngle steering_angle;
+EncoderSample latest_encoder;
+
+void update_homing() {
+    const EncoderSample sample = latest_encoder;
+    const auto previous_state = homing.state;
+    const bool valid = sample.read_ok && (sample.status & 0x20);
+    const SteeringIrqBlock block;
+    const int direction = homing.update(to_ms_since_boot(get_absolute_time()), sample.raw,
+                                        valid, steering_pulses.drained());
+    if (direction != 0) {
+        steering_pulses.jog(direction);
+        run_steering();
+    } else {
+        steering_pulses.stop();
+        if (homing.state == SteeringHoming::State::ready) {
+            steering_pulses.zero();
+            if (previous_state != SteeringHoming::State::ready)
+                steering_angle.reference(sample.raw, to_ms_since_boot(get_absolute_time()));
+        }
+    }
+}
+
 // ---- serial protocol ----
 // every frame is COBS-encoded and ends in a 0x00 byte, so a dropped byte only loses one frame
 // decoded frame: [type u8][payload], all multi-byte values are little-endian
 //   jetson -> pico  MSG_DRIVE      0x01  f32 steering position [-1, 1], f32 drivetrain speed [-1, 1]
-// steering: -1 = -half range, 0 = boot position (center), +1 = +half range
-//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rpm, f32 right rpm, i32 steering pulses, u16 encoder raw, u8 status, u8 read_ok
+// steering: -1 = -half range, 0 = homed center, +1 = +half range
+//   pico -> jetson  MSG_TELEMETRY  0x02  f32 left rps, f32 right rps, i32 steering pulses, u16 encoder raw, u8 status, u8 read_ok, f32 steering degrees (positive left, NaN until homed/invalid)
 // every TELEMETRY_PERIOD_MS; encoder raw/status are zero on I2C failure
-// steering pulses count emitted steps relative to boot (zero), signed by direction
-// rpm is always >= 0: the sensors count magnets going by, not which way the wheel turns
+// steering pulses count emitted steps relative to the latest homed center (boot until homing), signed by direction
+// rps is always >= 0: the sensors count magnets going by, not which way the wheel turns
 
 static_assert(std::endian::native == std::endian::little, "frames are little-endian, same as the RP2040");
 
 constexpr uint8_t MSG_DRIVE = 0x01;
 constexpr uint8_t MSG_TELEMETRY = 0x02;
 constexpr size_t DRIVE_FRAME_LEN = 1 + 2 * sizeof(float);
-constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float) + sizeof(int32_t) + 4;
+constexpr size_t TELEMETRY_FRAME_LEN = 1 + 2 * sizeof(float) + sizeof(int32_t) + 4 + sizeof(float);
 constexpr size_t MAX_ENCODED_LEN = 32;     // longer frames are garbage and get dropped
 constexpr uint32_t COMMAND_TIMEOUT_MS = 200;  // stop every motor if no valid command arrives for this long
 
@@ -283,16 +312,16 @@ void write_f32(std::span<uint8_t, sizeof(float)> bytes, float value) {
     std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(float)>>(value), bytes.begin());
 }
 
-// a sliding window over the last RPM_WINDOW_PERIODS edge counts
-class RpmWindow {
+// a sliding window over the last RPS_WINDOW_PERIODS edge counts
+class RpsWindow {
 public:
-    struct Rpm {
+    struct Rps {
         float left;
         float right;
     };
 
-    // adds one period's counts and returns the rpm over the whole window
-    Rpm add(cev::RpmCounts edges, float seconds) {
+    // adds one period's counts and returns the rps over the whole window
+    Rps add(cev::RpmCounts edges, float seconds) {
         periods_[next_] = {edges.left, edges.right, seconds};
         next_ = (next_ + 1) % periods_.size();
 
@@ -305,7 +334,7 @@ public:
             right += period.right;
             total_seconds += period.seconds;
         }
-        return {to_rpm(left, total_seconds), to_rpm(right, total_seconds)};
+        return {to_rps(left, total_seconds), to_rps(right, total_seconds)};
     }
 
 private:
@@ -315,19 +344,19 @@ private:
         float seconds = 0.0f;
     };
 
-    static float to_rpm(uint32_t edges, float seconds) {
-        return static_cast<float>(edges) / RPM_EDGES_PER_REV / seconds * 60.0f;
+    static float to_rps(uint32_t edges, float seconds) {
+        return static_cast<float>(edges) / WHEEL_EDGES_PER_REV / seconds;
     }
 
-    std::array<Period, RPM_WINDOW_PERIODS> periods_{};
+    std::array<Period, RPS_WINDOW_PERIODS> periods_{};
     size_t next_ = 0;
 };
 
 // if the host isn't reading, the frame (or its end) is dropped instead of blocking; see CMakeLists.txt
-void send_telemetry(float left_rpm, float right_rpm) {
+void send_telemetry(float left_rps, float right_rps) {
     std::array<uint8_t, TELEMETRY_FRAME_LEN> frame{MSG_TELEMETRY};
-    write_f32(std::span(frame).subspan<1, sizeof(float)>(), left_rpm);
-    write_f32(std::span(frame).subspan<1 + sizeof(float), sizeof(float)>(), right_rpm);
+    write_f32(std::span(frame).subspan<1, sizeof(float)>(), left_rps);
+    write_f32(std::span(frame).subspan<1 + sizeof(float), sizeof(float)>(), right_rps);
     int32_t position;
     {
         const SteeringIrqBlock block;
@@ -336,12 +365,14 @@ void send_telemetry(float left_rpm, float right_rpm) {
     std::ranges::copy(std::bit_cast<std::array<uint8_t, sizeof(int32_t)>>(position),
                       frame.begin() + 1 + 2 * sizeof(float));
 
-    const EncoderSample encoder = read_encoder();
+    const EncoderSample encoder = latest_encoder;
     constexpr size_t encoder_offset = 1 + 2 * sizeof(float) + sizeof(int32_t);
     frame[encoder_offset] = static_cast<uint8_t>(encoder.raw & 0xFF);
     frame[encoder_offset + 1] = static_cast<uint8_t>(encoder.raw >> 8);
     frame[encoder_offset + 2] = encoder.status;
     frame[encoder_offset + 3] = static_cast<uint8_t>(encoder.read_ok);
+
+    write_f32(std::span(frame).subspan<17, sizeof(float)>(), steering_angle.degrees());
 
     std::array<uint8_t, cobs::max_encoded_size(TELEMETRY_FRAME_LEN) + 1> encoded;
     size_t len = cobs::encode(frame, encoded);
@@ -365,6 +396,12 @@ void send_telemetry(float left_rpm, float right_rpm) {
     if (!std::isfinite(steering_position) || !std::isfinite(drivetrain_speed)) {
         return false;
     }
+
+    if (homing.state == SteeringHoming::State::idle) {
+        steering_angle.reset();
+        homing.start(to_ms_since_boot(get_absolute_time()));
+    }
+    if (homing.state != SteeringHoming::State::ready) return true;
 
     steer_to(steering_position);
     for (const DrivetrainMotor& motor : drivetrain) {
@@ -391,13 +428,14 @@ int main() {
     cev::rpm_init(RPM_LEFT_PIN, RPM_RIGHT_PIN);
     cev::Interval telemetry{.period_ms = TELEMETRY_PERIOD_MS};
     absolute_time_t last_telemetry = get_absolute_time();
-    RpmWindow rpm_window;
+    RpsWindow rps_window;
 
     std::array<uint8_t, MAX_ENCODED_LEN> rx;
     size_t rx_len = 0;
     bool rx_overflow = false;
     absolute_time_t last_command = get_absolute_time();
     bool timed_out = true;
+    cev::Interval encoder_poll{.period_ms = 5};
 
     while (true) {
         const int c = getchar_timeout_us(0);
@@ -419,6 +457,15 @@ int main() {
         if (!timed_out && absolute_time_diff_us(last_command, get_absolute_time()) > COMMAND_TIMEOUT_MS * 1000) {
             stop_all();
             timed_out = true;
+            homing.reset();
+        }
+
+        if (encoder_poll.due()) {
+            latest_encoder = read_encoder();
+            steering_angle.update(latest_encoder.raw,
+                                  latest_encoder.read_ok && (latest_encoder.status & 0x20),
+                                  to_ms_since_boot(get_absolute_time()));
+            if (!timed_out && homing.active()) update_homing();
         }
 
         // sent whether or not commands are arriving, so wheel speed can be read with the motors off.
@@ -427,8 +474,8 @@ int main() {
             const absolute_time_t now = get_absolute_time();
             const float seconds = static_cast<float>(absolute_time_diff_us(last_telemetry, now)) / 1e6f;
             last_telemetry = now;
-            const RpmWindow::Rpm rpm = rpm_window.add(cev::rpm_take(), seconds);
-            send_telemetry(rpm.left, rpm.right);
+            const RpsWindow::Rps rps = rps_window.add(cev::rpm_take(), seconds);
+            send_telemetry(rps.left, rps.right);
         }
 
         // led on while commands are arriving

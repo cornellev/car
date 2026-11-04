@@ -40,13 +40,25 @@ public:
         if (!stopped_ && holdoff_ > 0) {
             holdoff_--;
         } else if (!stopped_) {
-            const SteeringMotion::Step step = motion_.next_step();
+            const SteeringMotion::Step step = jog_direction_ != 0
+                ? SteeringMotion::Step{jog_direction_, 2000, 0.0f, 0.0f}
+                : motion_.next_step();
             if (step.direction != 0) {
-                motion_.step_taken(step);
+                if (jog_direction_ == 0) motion_.step_taken(step);
                 buffered_ = pulse(step.interval_us, step.direction);
             }
         }
         return {buffered_, running_.direction};
+    }
+
+    // Homing uses a conservative fixed 500 Hz pulse rate, independent of soft limits.
+    void jog(int direction) { jog_direction_ = direction; }
+
+    // Only rebase after stop() and after the hardware pipeline has drained.
+    void zero() {
+        position_ = 0;
+        motion_.zero();
+        jog_direction_ = 0;
     }
 
     // stops planning; steps already handed to the PWM still go out
@@ -86,6 +98,7 @@ private:
     Period running_ = idle();   // the period the PWM is in now
     Period buffered_ = idle();  // the period the PWM loads at the next wrap
     int32_t position_ = 0;
+    int jog_direction_ = 0;
     bool stopped_ = true;
     uint32_t holdoff_ = 0;  // idle periods left before planning resumes
 };
