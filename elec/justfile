@@ -1,49 +1,33 @@
 # use powershell on windows
 set windows-shell := ["powershell.exe", "-NoProfile", "-Command"]
 
-# prefer the arm-gcc and picotool the build downloaded into .tools over ones on PATH
-# with ELEC_SYSTEM_TOOLS set (the nix shell), the build uses PATH, so recipes do too
-sep := if os() == "windows" { ";" } else { ":" }
-tools := module_directory() / ".tools" / "picotool" + sep + module_directory() / ".tools" / "arm-gnu-toolchain" / "bin" + sep
-export PATH := if env("ELEC_SYSTEM_TOOLS", "") == "" { tools + env("PATH") } else { env("PATH") }
+# run from the repo root, where CMakePresets.json lives
+set working-directory := ".."
 
 [private]
 default:
-    @just --list
+    @just --justfile {{ source_file() }} --list
 
 # configure all targets
 configure:
-    cmake -S . -B build -G Ninja
+    cmake --preset firmware
 
 # build all targets
 build: configure
-    cmake --build build
+    cmake --build --preset firmware
 
 # build a single target
 build-target target: configure
-    cmake --build build --target {{ target }}
+    cmake --build --preset firmware --target {{ target }}
 
 # clean build artifacts
 clean:
-    cmake -E rm -rf build
+    cmake -E rm -rf build/firmware
 
 # flash a project onto a pico
-flash target: (build-target target)
-    picotool load -f -x build/src/{{ target }}/{{ target }}.uf2
+flash target: configure
+    cmake --build --preset firmware --target flash_{{ target }}
 
 # ensure installed toolchain versions are as expected
 doctor:
-    @cmake -P setup/doctor.cmake
-
-# clang-tidy can't find the arm headers itself, so pass the ones arm-none-eabi-g++ uses
-# nix's clang-tidy wrapper adds host headers, so use the unwrapped binary when there is one
-# lint every file the firmware build compiles, except vendored and generated code
-[unix]
-lint: configure
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tidy=$(command -v clang-tidy-unwrapped || command -v clang-tidy)
-    includes=$(arm-none-eabi-g++ -xc++ -E -v /dev/null 2>&1 | sed -n '/search starts here/,/End of search/s|^ |-extra-arg=-isystem|p')
-    # run-clang-tidy prints each file's full command and a "N warnings generated" tally; drop both
-    run-clang-tidy -p build -quiet -clang-tidy-binary "$tidy" $includes '^((?!/(vendor|build)/).)*$' 2>&1 \
-        | { grep -vE '^\[[0-9]+/[0-9]+\]\[|[0-9]+ warnings generated\.$' || true; } | cat -s
+    @cmake -P elec/setup/doctor.cmake
