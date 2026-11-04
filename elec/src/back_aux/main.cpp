@@ -5,10 +5,11 @@
 #include "chuds/chuds.hpp"
 #include "chuds/mcp_transport.hpp"
 #include "common/can_health.hpp"
+#include "common/can_rx.hpp"
 #include "common/interval.hpp"
 #include "common/rpm.hpp"
 #include "common/rx_log.hpp"
-#include "common/status_blink.hpp"
+#include "common/status_led.hpp"
 #include "config.hpp"
 #include "hardware/adc.h"
 #include "hardware/clocks.h"
@@ -26,9 +27,6 @@ constexpr std::uint32_t kPublishPeriodMs   = 100;
 constexpr std::uint32_t kBlinkHalfPeriodMs = 500;
 // the leader must resend body state within this period or outputs fall back to their safe state
 constexpr std::uint32_t kCommandTimeoutMs = 1000;
-// frames handled per loop pass, the mcp rx fifo depth, so a flooded bus cannot starve the timers
-constexpr int kMaxRxPerPass = 8;
-
 // a loop pass takes microseconds, so this only trips on a real hang, well inside the 1 s timeout
 constexpr std::uint32_t kWatchdogMs = 500;
 
@@ -95,7 +93,7 @@ void wiper_tick(Wiper& w) {
 }
 
 void init_outputs() {
-    for (const unsigned pin : {kStatusLed, kTurnLeft, kTurnRight}) {
+    for (const unsigned pin : {kTurnLeft, kTurnRight}) {
         gpio_init(pin);
         gpio_set_dir(pin, GPIO_OUT);
         gpio_put(pin, false);
@@ -115,12 +113,12 @@ void init_outputs() {
     pwm_set_enabled(slice, true);
 }
 
-// drive this node's outputs from body state bits
-void apply(std::uint8_t bits, Wiper& w) {
-    const bool lit = (bits & chuds::BodyState::kBlinkPhase) != 0;
-    gpio_put(kTurnLeft, lit && (bits & chuds::BodyState::kLeftTurn) != 0);
-    gpio_put(kTurnRight, lit && (bits & chuds::BodyState::kRightTurn) != 0);
-    w.running = (bits & chuds::BodyState::kWiper) != 0;
+// drive this node's outputs from the body state
+void apply_body_state(const chuds::BodyState& s, Wiper& w) {
+    const bool lit = s.blink_phase();
+    gpio_put(kTurnLeft, lit && s.left_turn());
+    gpio_put(kTurnRight, lit && s.right_turn());
+    w.running = s.wiper();
     w.parking = !w.running;
 }
 
@@ -147,16 +145,15 @@ int main() {
         std::printf("can init failed\n");
     }
 
-    // body state bits currently applied
-    std::uint8_t body{};
+    // the commanded body outputs currently applied
+    chuds::BodyState body{};
     Wiper wiper{};
     // a stop latches until reset
     // todo clear on a ratified resume command
     bool stopped{};
     cev::Interval pub{kPublishPeriodMs};
     cev::Interval wiper_iv{kWiperTickMs};
-    bool led_on{};
-    cev::Interval blink{kBlinkHalfPeriodMs};
+    cev::StatusLed status{kStatusLed, kBlinkHalfPeriodMs};
     cev::CanHealth can_health;
     cev::RxLog rx_log{kNodeId};
     absolute_time_t command_deadline = make_timeout_time_ms(kCommandTimeoutMs);
@@ -167,7 +164,7 @@ int main() {
     while (true) {
         watchdog_update();
         can_health.check(bus);
-        for (int i = 0; i < kMaxRxPerPass; ++i) {
+        for (int i = 0; i < cev::kMaxRxPerPass; ++i) {
             const auto rx = bus.recv();
             if (!rx) {
                 break;
@@ -176,21 +173,21 @@ int main() {
             rx_log.log(m);
             if (m.cls == chuds::MsgClass::Emergency && m.type == chuds::MsgType::Stop) {
                 stopped = true;
-                body    = 0;
-                apply(body, wiper);
+                body    = chuds::BodyState{};
+                apply_body_state(body, wiper);
             } else if (!stopped) {
                 if (const auto b = chuds::catalog_body<chuds::BodyState>(m)) {
-                    body = b->bits;
-                    apply(body, wiper);
+                    body = *b;
+                    apply_body_state(body, wiper);
                     command_deadline = make_timeout_time_ms(kCommandTimeoutMs);
                 }
             }
-            cev::apply_status_blink(m, kNodeId, blink);
+            status.apply_status_blink(m, kNodeId);
         }
 
         if (time_reached(command_deadline)) {
-            body = 0;
-            apply(body, wiper);
+            body = chuds::BodyState{};
+            apply_body_state(body, wiper);
             command_deadline = make_timeout_time_ms(kCommandTimeoutMs);
         }
 
@@ -198,10 +195,7 @@ int main() {
             wiper_tick(wiper);
         }
 
-        if (blink.due()) {
-            led_on = !led_on;
-            gpio_put(kStatusLed, led_on);
-        }
+        status.tick();
 
         if (pub.due()) {
             const cev::RpmCounts rpm = cev::rpm_take();

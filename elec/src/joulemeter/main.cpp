@@ -4,9 +4,10 @@
 #include "chuds/chuds.hpp"
 #include "chuds/mcp_transport.hpp"
 #include "common/can_health.hpp"
+#include "common/can_rx.hpp"
 #include "common/interval.hpp"
 #include "common/rx_log.hpp"
-#include "common/status_blink.hpp"
+#include "common/status_led.hpp"
 #include "config.hpp"
 #include "hardware/adc.h"
 #include "pico/stdlib.h"
@@ -14,8 +15,6 @@
 using namespace chuds::joulemeter;
 
 constexpr std::uint32_t kBlinkHalfPeriodMs = 500;
-// frames handled per loop pass, the mcp rx fifo depth, so a flooded bus cannot starve the timers
-constexpr int kMaxRxPerPass = 8;
 
 namespace {
 
@@ -45,10 +44,6 @@ float raw_to_volts(float raw) { return raw / kAdcCountsMax * kAdcVref; }
 int main() {
     stdio_init_all();
 
-    gpio_init(kStatusLed);
-    gpio_set_dir(kStatusLed, GPIO_OUT);
-    gpio_put(kStatusLed, false);
-
     adc_init();
     adc_gpio_init(kVoltageAdc);
     adc_gpio_init(kCurrentAdc);
@@ -76,20 +71,19 @@ int main() {
     double i_sum{};
     absolute_time_t prev = get_absolute_time();
     cev::Interval report{kReportPeriodMs};
-    bool led_on{};
-    cev::Interval blink{kBlinkHalfPeriodMs};
+    cev::StatusLed status{kStatusLed, kBlinkHalfPeriodMs};
     cev::CanHealth can_health;
     cev::RxLog rx_log{kNodeId};
 
     while (true) {
         can_health.check(bus);
-        for (int i = 0; i < kMaxRxPerPass; ++i) {
+        for (int i = 0; i < cev::kMaxRxPerPass; ++i) {
             const auto rx = bus.recv();
             if (!rx) {
                 break;
             }
             rx_log.log(*rx);
-            cev::apply_status_blink(*rx, kNodeId, blink);
+            status.apply_status_blink(*rx, kNodeId);
         }
 
         const float v_bus = raw_to_volts(read_raw(kVoltageAdc)) * kVoltageDividerRatio;
@@ -105,10 +99,7 @@ int main() {
         v_sum += static_cast<double>(v_bus) * dt;
         i_sum += static_cast<double>(amps) * dt;
 
-        if (blink.due()) {
-            led_on = !led_on;
-            gpio_put(kStatusLed, led_on);
-        }
+        status.tick();
 
         if (report.due()) {
             const Telemetry t{static_cast<float>(v_sum / period_s),

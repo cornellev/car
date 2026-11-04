@@ -11,8 +11,9 @@
 using namespace chuds;
 
 TEST_CASE("format_message prints a catalog body with its values") {
-    const auto m = make_message(MsgClass::Command, kBodyStateId, MsgType::Update,
-                                BodyState{BodyState::kHeadlights});
+    BodyState body{};
+    body.set_headlights(true);
+    const auto m = make_message(MsgClass::Command, kBodyStateId, MsgType::Update, body);
     REQUIRE(m.has_value());
     std::array<char, 96> line{};
     const int n = format_message(*m, line);

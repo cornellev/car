@@ -17,7 +17,7 @@ inline int format_message(const Message& m, std::span<char> out) {
                              b->sender);
     }
     if (const auto b = catalog_body<BodyState>(m)) {
-        return std::snprintf(out.data(), out.size(), "body state 0x%02x", b->bits);
+        return std::snprintf(out.data(), out.size(), "body state 0x%02x", b->raw());
     }
     if (const auto b = catalog_body<front_aux::Telemetry>(m)) {
         return std::snprintf(out.data(), out.size(), "front_aux rpm %d/%d steering %d", b->rpm_left,
