@@ -1,5 +1,7 @@
 //! Drive the car from ackermann commands on `cev/commands/control`.
-//! Shows serial telemetry and publishes wheel rotations/s and steering heading in degrees.
+//! Commands arrive in radians and m/s. Steering is closed-loop on the Pico's
+//! encoder angle and clamped at 11 degrees. Drivetrain duty is full scale at 2 m/s.
+//! Telemetry publishes wheel rot/s and that encoder angle in degrees.
 //!
 //! usage: teleop [--dry-run] [serial port]
 //! --dry-run prints the commands instead of sending them.
@@ -23,6 +25,31 @@ const LEFT_WHEEL_KEY: &str = "cev/sensors/wheels/left_rpm";
 const STEERING_ANGLE_KEY: &str = "cev/sensors/steering/steering_angle";
 
 const MAX_FRAME_LEN: usize = 32; // longer runs without a 0x00 are garbage
+
+const MAX_STEERING_DEG: f32 = 11.0;
+// shortcut: untuned, set wheels-up in WP6. Command change per degree of error, once per telemetry frame.
+const STEERING_GAIN: f32 = 0.01;
+const STEERING_DEADBAND_DEG: f32 = 0.05;
+// shortcut: unmeasured; full duty is about 2 m/s. Feedforward only.
+const MAX_SPEED_MPS: f32 = 2.0;
+
+fn steering_target_deg(angle_rad: f32) -> f32 {
+    angle_rad.to_degrees().clamp(-MAX_STEERING_DEG, MAX_STEERING_DEG)
+}
+
+// Positive angle is left. A positive Pico command steers right, so the correction is negated.
+fn steering_step(command: f32, target_deg: f32, measured_deg: f32) -> f32 {
+    let error = target_deg - measured_deg;
+    if error.abs() <= STEERING_DEADBAND_DEG {
+        command
+    } else {
+        (command - STEERING_GAIN * error).clamp(-1.0, 1.0)
+    }
+}
+
+fn drivetrain_command(speed_mps: f32) -> f32 {
+    (speed_mps / MAX_SPEED_MPS).clamp(-1.0, 1.0)
+}
 
 fn open_port(path: &str) -> Option<Box<dyn SerialPort>> {
     // the pico only reads usb input while dtr is set; linux sets it on open, windows doesn't
@@ -82,6 +109,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut port: Option<Box<dyn SerialPort>> = None;
     let mut last_open_attempt: Option<Instant> = None;
     let mut rx = Vec::new();
+    let mut steering_cmd = 0.0f32;
 
     let mut ackermann = ackermann::AckermannCommand::default();
 
@@ -117,20 +145,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                     println!("steering: {:.3}, drivetrain: {:.3}", ackermann.steering_angle, ackermann.speed);
                     continue;
                 } else {
-                    if port.is_none() && last_open_attempt.is_none_or(|t| t.elapsed() >= REOPEN_PERIOD) {
-                        last_open_attempt = Some(Instant::now());
-                        port = open_port(&port_path);
-                        rx.clear();
+                    if port.is_none() {
+                        steering_cmd = 0.0;
+                        if last_open_attempt.is_none_or(|t| t.elapsed() >= REOPEN_PERIOD) {
+                            last_open_attempt = Some(Instant::now());
+                            port = open_port(&port_path);
+                            rx.clear();
+                        }
                     }
 
-                    let steering = -(ackermann.steering_angle as f32);
-                    let drivetrain = ackermann.speed as f32;
+                    let target_deg = steering_target_deg(ackermann.steering_angle as f32);
+                    let drivetrain = drivetrain_command(ackermann.speed as f32);
 
                     if let Some(p) = port.as_mut()
-                        && let Err(e) = p.write_all(&protocol::encode_drive(steering, drivetrain))
+                        && let Err(e) = p.write_all(&protocol::encode_drive(steering_cmd, drivetrain))
                     {
                         eprintln!("write failed, reopening: {e}");
                         port = None;
+                        steering_cmd = 0.0;
                     }
                     if let Some(p) = port.as_mut() {
                         match read_telemetry(p.as_mut(), &mut rx) {
@@ -144,6 +176,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                     None => "I2C failed".to_string(),
                                 };
                                 let heading = telemetry.steering_degrees.unwrap_or(f32::NAN);
+                                steering_cmd = match telemetry.steering_degrees {
+                                    Some(measured) => steering_step(steering_cmd, target_deg, measured),
+                                    None => 0.0,
+                                };
                                 if let Some(heading) = telemetry.steering_degrees {
                                     if let Err(e) = steering_heading_pub
                                         .put(heading.to_string())
@@ -153,7 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                                         eprintln!("\nsteering heading publish failed: {e}");
                                     }
                                 }
-                                eprint!("\rrps  left {left:7.10}  right {right:7.10}  steering {position:7} pulses ({heading:6.1} deg)  encoder {encoder:24}  ");
+                                eprint!("\rrps  left {left:7.10}  right {right:7.10}  steering {position:7} pulses ({heading:6.1} deg)  target {target_deg:5.2} deg cmd {steering_cmd:+.3}  encoder {encoder:24}  ");
                                 for (publisher, rps) in [(&right_wheel_pub, right), (&left_wheel_pub, left)] {
                                     if let Err(e) = publisher
                                         .put(rps.to_string())
@@ -168,6 +204,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
                             Err(e) => {
                                 eprintln!("\nread failed, reopening: {e}");
                                 port = None;
+                                steering_cmd = 0.0;
                             }
                         }
                     }
@@ -176,4 +213,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn steering_target_clamps_at_eleven_degrees() {
+        assert!((steering_target_deg(5.0_f32.to_radians()) - 5.0).abs() < 1e-4);
+        assert!((steering_target_deg(40.0_f32.to_radians()) - 11.0).abs() < 1e-4);
+        assert!((steering_target_deg((-40.0_f32).to_radians()) - (-11.0)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn steering_step_turns_left_when_measured_is_right_of_target() {
+        let command = steering_step(0.0, 0.0, -2.0);
+        assert!(command < 0.0, "{command}");
+        let command = steering_step(0.0, 0.0, 2.0);
+        assert!(command > 0.0, "{command}");
+    }
+
+    #[test]
+    fn steering_step_holds_inside_the_deadband_and_clamps() {
+        assert_eq!(steering_step(0.4, 1.0, 1.0 + STEERING_DEADBAND_DEG / 2.0), 0.4);
+        assert_eq!(steering_step(0.0, 200.0, 0.0), -1.0);
+        assert_eq!(steering_step(0.0, -200.0, 0.0), 1.0);
+    }
+
+    #[test]
+    fn steering_step_converges_for_a_linear_plant() {
+        for gain in [15.0_f32, 30.0] {
+            let target = 5.0;
+            let mut command = 0.0;
+            let mut measured = 0.0;
+            for _ in 0..5_000 {
+                assert!((-1.0..=1.0).contains(&command));
+                command = steering_step(command, target, measured);
+                measured = gain * -command;
+            }
+            assert!((measured - target).abs() <= STEERING_DEADBAND_DEG, "{measured}");
+        }
+    }
+
+    #[test]
+    fn drivetrain_command_is_duty_at_two_meters_per_second() {
+        assert!((drivetrain_command(0.8) - 0.4).abs() < 1e-6);
+        assert_eq!(drivetrain_command(5.0), 1.0);
+        assert_eq!(drivetrain_command(-5.0), -1.0);
+    }
 }
