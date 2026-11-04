@@ -29,10 +29,13 @@ test:
 # clang-tidy can't find the arm headers itself, so pass the ones the firmware compiler uses
 # nix's clang-tidy wrapper adds host headers, so the firmware lint uses the unwrapped binary when there is one
 # lint every file the builds compile, except vendored and generated code
+# extra arguments go to run-clang-tidy, like ci's -warnings-as-errors='*'
+[positional-arguments]
 [unix]
-lint:
+lint *args:
     #!/usr/bin/env bash
     set -euo pipefail
+    args=("$@")
     tidy=$(command -v clang-tidy-unwrapped || command -v clang-tidy) || { echo "clang-tidy not found" >&2; exit 1; }
     cmake --preset firmware >/dev/null
     cmake --preset host >/dev/null
@@ -41,5 +44,5 @@ lint:
     # run-clang-tidy prints each file's full command and a "N warnings generated" tally; drop both
     quiet() { "$@" 2>&1 | { grep -vE '^\[ *[0-9]+/[0-9]+\]\[|[0-9]+ warnings?( and [0-9]+ errors?)? generated\.$' || true; } | cat -s; }
     ours="^$PWD/(?!vendor/|build/)"
-    quiet run-clang-tidy -p build/firmware -quiet -clang-tidy-binary "$tidy" $includes "$ours"
-    quiet run-clang-tidy -p build/host -quiet "$ours"
+    quiet run-clang-tidy -p build/firmware -quiet -clang-tidy-binary "$tidy" $includes "${args[@]}" "$ours"
+    quiet run-clang-tidy -p build/host -quiet "${args[@]}" "$ours"

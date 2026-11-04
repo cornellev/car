@@ -1,4 +1,5 @@
-#include <stdio.h>
+#include <cstdint>
+#include <cstdio>
 
 #include "hardware/spi.h"
 #include "mcp251863.hpp"
@@ -36,8 +37,8 @@ int main() {
 
     mcp.begin();
 
-    uint8_t data[8] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
-    uint32_t id     = 0x123;
+    uint8_t data[8]   = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
+    const uint32_t id = 0x123;
 
     int count = 0;
 
@@ -58,7 +59,7 @@ int main() {
 
         // Polling information
         if (count % 10 == 0) {
-            Status s = mcp.getStatus().value();
+            const Status s = mcp.getStatus().value();
             printf("bus_off=%d tx_err=%d tx_count=%d\n", s.bus_off, s.tx_error_passive,
                    s.tx_error_count);
         }

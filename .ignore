@@ -1,0 +1,2 @@
+# vendored pico-sdk submodule: skip in search/count tools (git still tracks it)
+vendor/

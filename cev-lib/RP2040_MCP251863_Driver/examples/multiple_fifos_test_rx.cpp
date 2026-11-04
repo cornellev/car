@@ -1,4 +1,4 @@
-#include <stdio.h>
+#include <cstdio>
 
 #include "hardware/spi.h"
 #include "mcp251863.hpp"
@@ -13,7 +13,9 @@ static constexpr uint INT_PIN  = 25;
 static constexpr uint INT0_PIN = 26;
 static constexpr uint INT1_PIN = 27;
 
-static void print_frame(const CanFdFrame& frame) {
+namespace {
+
+void print_frame(const CanFdFrame& frame) {
     printf("id=0x%03X  len=%d  fdf=%d  brs=%d  ide=%d  esi=%d  filter=%d  data=", frame.id,
            frame.len, frame.fdf, frame.brs, frame.ide, frame.esi, frame.filter_hit);
     for (int i = 0; i < frame.len; i++) {
@@ -21,6 +23,8 @@ static void print_frame(const CanFdFrame& frame) {
     }
     printf("\n");
 }
+
+}  // namespace
 
 int main() {
     stdio_init_all();
@@ -66,7 +70,7 @@ int main() {
             // do something else!
             tight_loop_contents();
         }
-        CanFdFrame frame0 = mcp.get_read_frame().value();
+        const CanFdFrame frame0 = mcp.get_read_frame().value();
         // Read frame from RX FIFO 1
         while (mcp.start_pop_canfd(1) != Error::None) {
             sleep_ms(100);
@@ -75,7 +79,7 @@ int main() {
             // do something else!
             tight_loop_contents();
         }
-        CanFdFrame frame1 = mcp.get_read_frame().value();
+        const CanFdFrame frame1 = mcp.get_read_frame().value();
         // Read frame from RX FIFO 2
         while (mcp.start_pop_canfd(2) != Error::None) {
             sleep_ms(100);
@@ -84,7 +88,7 @@ int main() {
             // do something else!
             tight_loop_contents();
         }
-        CanFdFrame frame2 = mcp.get_read_frame().value();
+        const CanFdFrame frame2 = mcp.get_read_frame().value();
         if (frame0.valid) {
             received0++;
             printf("FIFO 0: [%d] ", received0);
@@ -102,7 +106,7 @@ int main() {
         }
         // print status every 10 frames so you can spot errors accumulating
         if (received1 % 10 == 0) {
-            Status s = mcp.getStatus().value();
+            const Status s = mcp.getStatus().value();
             printf("status: bus_off=%d  rx_err=%d  rx_overflow=0x%08X\n", s.bus_off,
                    s.rx_error_count, s.rx_overflow_if);
         }
