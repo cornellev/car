@@ -30,6 +30,8 @@
               cmake
               cmake-language-server
               ninja
+              # the pico-sdk configure and run-clang-tidy need it
+              python3
               just
               clang-tools
               # only run-clang-tidy, the rest of the unwrapped clang would shadow the compiler
@@ -37,13 +39,12 @@
               gh
             ];
 
-            # pico-sdk is vendored at vendor/pico-sdk
-            CMAKE_PREFIX_PATH = "${pkgs.picotool}";
             # use these tools instead of the build's own download of the pinned arm-gcc and picotool
             ELEC_SYSTEM_TOOLS = "1";
+            CMAKE_PREFIX_PATH = "${pkgs.picotool}";
             PICO_TOOLCHAIN_PATH = "${pkgs.gcc-arm-embedded}";
+            # telem/shm doesn't set this itself
             CMAKE_EXPORT_COMPILE_COMMANDS = "1";
-            CMAKE_GENERATOR = "Ninja";
           };
 
           treefmt = {
