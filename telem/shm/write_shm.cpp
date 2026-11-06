@@ -145,12 +145,20 @@ class MasterShm {
                      sizeof(SharedBlock), log_rx_ ? "on" : "off");
         if (!std::isfinite(steer_scale_) || !std::isfinite(steer_offset_))
             std::fprintf(stderr, "Steering calibration missing: angle will be NaN\n");
+        else
+            std::fprintf(stderr, "Steering calibration present: scale=%g offset=%g\n", steer_scale_,
+                         steer_offset_);
         if (!std::isfinite(brake_scale_) || !std::isfinite(brake_offset_))
             std::fprintf(stderr, "Brake calibration missing: pressure will be NaN\n");
+        else
+            std::fprintf(stderr, "Brake calibration present: scale=%g offset=%g\n", brake_scale_,
+                         brake_offset_);
         const char* gps_path = std::getenv("SHM_GPS_DEVICE");
         gps_serial_ = open(gps_path ? gps_path : "/dev/serial0", O_RDONLY | O_NOCTTY | O_NONBLOCK);
         if (gps_serial_ >= 0) gps_file_ = fdopen(gps_serial_, "r");
         if (gps_file_) {
+            std::fprintf(stderr, "GPS UART opened: %s (waiting for valid RMC data)\n",
+                         gps_path ? gps_path : "/dev/serial0");
             gps_started_ = true;
             gps_thread_  = std::thread([this] { gps_loop(); });
         } else
