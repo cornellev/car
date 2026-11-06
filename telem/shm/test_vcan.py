@@ -21,7 +21,7 @@ def main():
     tty.setraw(slave)
     env = dict(os.environ, SHM_STEERING_SCALE='0.1', SHM_STEERING_OFFSET='-100',
                SHM_BRAKE_SCALE='0.25', SHM_BRAKE_OFFSET='-10',
-               SHM_CURRENT_OFFSET_A='0', SHM_EDGES_PER_REV='32', SHM_WINDOW_MS='100',
+               SHM_CURRENT_OFFSET_A='0',
                SHM_GPS_DEVICE=os.ttyname(slave))
     # Test owns /sensor_shm; do not run alongside a production writer.
     with socket.socket(socket.PF_CAN, socket.SOCK_RAW, socket.CAN_RAW) as can:
@@ -62,25 +62,34 @@ def main():
             initial = wait_for(lambda s: s['global_ts'] > 0)
             assert math.isnan(initial['motor']['rpm']) and initial['motor']['ts'] == 0
             assert math.isnan(initial['steering']['turn_angle'])
-            send(0x210, struct.pack('<HHH', 32, 16, 1500))
+            send(0x210, struct.pack('<IHHHH', 0xfffffff0, 600, 300, 1500, 0))
             front = wait_for(lambda s: s['rpm_front']['rpm_left'] == 600)
+            assert front['rpm_front']['ts'] == 0xfffffff0
+            assert front['steering']['ts'] == 0xfffffff0
             assert front['rpm_front']['rpm_right'] == 300
             assert front['steering']['turn_angle'] == 50
             assert front['rpm_back']['ts'] == 0
-            send(0x220, struct.pack('<HHH', 8, 24, 200))
+            send(0x220, struct.pack('<IHHHH', 123456, 150, 450, 200, 0))
             back = wait_for(lambda s: s['rpm_back']['rpm_right'] == 450)
+            assert back['rpm_back']['ts'] == 123456
             assert back['rpm_back']['rpm_left'] == 150
             assert back['steering']['brake_pressure'] == 40
             assert back['rpm_front'] == front['rpm_front']
             assert back['steering']['ts'] == front['steering']['ts']
             assert math.isclose(back['filtered']['speed'], 300 * math.pi * 0.58166 / 60, rel_tol=1e-5)
-            send(0x230, struct.pack('<ffff', 48, 12.5, 600, 1000))
+            send(0x230, struct.pack('<Iffff', 654321, 48, 12.5, 600, 1000))
             power = wait_for(lambda s: s['power']['current'] == 12.5)
+            assert power['power']['ts'] == 654321
             assert power['power']['voltage'] == 48
             assert power['rpm_front'] == front['rpm_front']
             assert power['rpm_back'] == back['rpm_back']
-            send(0x210, struct.pack('<HHH', 0, 0, 2000))
+            send(0x210, struct.pack('<IHHHH', 20, 0, 0, 2000, 0))
             updated = wait_for(lambda s: s['steering']['turn_angle'] == 100)
+            assert updated['rpm_front']['ts'] == 20
+            assert updated['steering']['ts'] == 20
+            assert (updated['rpm_front']['ts'] - front['rpm_front']['ts']) % 2**32 == 36
+            assert updated['rpm_front']['rpm_left'] == 0
+            assert updated['rpm_front']['rpm_right'] == 0
             assert updated['steering']['brake_pressure'] == 40
             assert updated['power'] == power['power']
             assert updated['rpm_back'] == back['rpm_back']

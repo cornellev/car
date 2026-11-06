@@ -129,10 +129,6 @@ static void handle_sigint(int) { g_stop = 1; }
 class MasterShm {
    public:
     explicit MasterShm(const char* interface) {
-        if (!(edges_ > 0) || !(window_ms_ > 0)) {
-            std::fprintf(stderr, "Wheel edges and window must be positive\n");
-            return;
-        }
         cache_.power_snap     = {0, NANF, NANF};
         cache_.steering_snap  = {0, NANF, NANF};
         cache_.rpm_snap_front = cache_.rpm_snap_back = {0, NANF, NANF};
@@ -200,28 +196,26 @@ class MasterShm {
     int shm_fd_{-1};
     SharedBlock* shm_{nullptr};
     float speed           = NANF;
-    float edges_          = setting("SHM_EDGES_PER_REV", 32);
-    float window_ms_      = setting("SHM_WINDOW_MS", 100);
     float steer_scale_    = setting("SHM_STEERING_SCALE", NANF);
     float steer_offset_   = setting("SHM_STEERING_OFFSET", NANF);
     float brake_scale_    = setting("SHM_BRAKE_SCALE", NANF);
     float brake_offset_   = setting("SHM_BRAKE_OFFSET", NANF);
     float current_offset_ = setting("SHM_CURRENT_OFFSET_A", 0);
-    float rpm(uint16_t count) const { return count * 60000.0f / (edges_ * window_ms_); }
     void receive(const chuds::Message& m) {
         if (m.type != chuds::MsgType::Update) return;
-        const auto ts = static_cast<uint32_t>(now_us());
         if (auto t = chuds::catalog_body<chuds::front_aux::Telemetry>(m)) {
-            cache_.rpm_snap_front   = {ts, rpm(t->rpm_left), rpm(t->rpm_right)};
-            cache_.steering_snap.ts = ts;  // front-node receive time only
+            cache_.rpm_snap_front   = {t->ts, static_cast<float>(t->rpm_left),
+                                       static_cast<float>(t->rpm_right)};
+            cache_.steering_snap.ts = t->ts;  // front-node sample time only
             cache_.steering_snap.turn_angle =
                 t->steering <= 4095 ? t->steering * steer_scale_ + steer_offset_ : NANF;
         } else if (auto t = chuds::catalog_body<chuds::back_aux::Telemetry>(m)) {
-            cache_.rpm_snap_back = {ts, rpm(t->rpm_left), rpm(t->rpm_right)};
+            cache_.rpm_snap_back = {t->ts, static_cast<float>(t->rpm_left),
+                                    static_cast<float>(t->rpm_right)};
             cache_.steering_snap.brake_pressure =
                 t->brake <= 4095 ? t->brake * brake_scale_ + brake_offset_ : NANF;
         } else if (auto t = chuds::catalog_body<chuds::joulemeter::Telemetry>(m)) {
-            cache_.power_snap = {ts, t->current + current_offset_, t->voltage};
+            cache_.power_snap = {t->ts, t->current + current_offset_, t->voltage};
         }
     }
     std::mutex gps_mutex_;

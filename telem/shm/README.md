@@ -38,20 +38,19 @@ reader now accumulates nonblocking reads and can shut down without a GPS fix.
 
 | Input | Snapshot units / conversion |
 | --- | --- |
-| front_aux wheel counts | RPM = counts × 60000 / (edges per revolution × window ms) |
-| back_aux wheel counts | Same; rear average drives the existing speed filter |
+| front_aux wheel RPM | Firmware RPM copied directly to snapshot floats |
+| back_aux wheel RPM | Same; rear average drives the existing speed filter |
 | front_aux steering ADC | steering angle in degrees = ADC × scale + offset |
 | back_aux brake ADC | brake pressure in bar = ADC × scale + offset |
 | joulemeter current / voltage | A / V, already converted by firmware; current + optional offset |
 | filtered speed | m/s; RPM × pi × 0.58166 m / 60, existing alpha 0.05 filter at 200 Hz |
 
+Wheel firmware converts 32 rising pulses per revolution using the actual elapsed
+sample window. The writer does not rescale RPM; `SHM_EDGES_PER_REV` and
+`SHM_WINDOW_MS` are no longer used.
+
 Configuration uses environment variables:
 
-- `SHM_EDGES_PER_REV` defaults to **32, provisional pending elec confirmation**.
-- `SHM_WINDOW_MS` defaults to **100**, matching `kPublishPeriodMs` in both
-  auxiliary firmwares and `rpm_take()` (rising edges since previous call).
-  This is a nominal firmware window, not CAN arrival spacing; scheduling jitter,
-  startup windows and lost frames cannot be reconstructed from the catalog.
 - `SHM_STEERING_SCALE`, `SHM_STEERING_OFFSET`: degrees/count and degrees.
 - `SHM_BRAKE_SCALE`, `SHM_BRAKE_OFFSET`: bar/count and bar.
 - Both ADC coefficients must be provided for each measurement. Defaults are NaN;
@@ -63,7 +62,7 @@ Configuration uses environment variables:
   removed by default, pending a joulemeter bench comparison with elec. Set an
   explicit correction only after testing; no such validation has been performed.
 
-Numeric overrides must be finite; wheel edges and window must be positive.
+Numeric overrides must be finite.
 `errcount` now counts unsuccessful CAN receives other than an empty queue,
 including rejected frames and transport faults, rather than failed SPI polls.
 It does not indicate missing nodes or guarantee detection of lost frames.
@@ -71,15 +70,16 @@ It does not indicate missing nodes or guarantee detection of lost frames.
 ## Timestamps and validity limitations
 
 `global_ts` is local monotonic publication time in microseconds (64 bits).
-Per-node timestamps are local monotonic receive times in microseconds truncated
-to 32 bits, wrapping approximately every 71.6 minutes; they are not sensor times.
-Compare modulo 2^32. A wrapped value can equal zero, so zero alone is not a
-permanent validity guarantee.
+CAN node timestamps are copied from each telemetry body's `uint32_t ts`: local
+microseconds since the sending board booted, wrapping approximately every 71.6
+minutes. They are sensor timestamps, not Pi receive times, and are not synchronized
+with other boards or `global_ts`. Compare intervals within one board modulo 2^32.
+A wrapped value can equal zero, so zero alone is not a permanent validity guarantee.
 
 Front RPM and `steering.ts` advance together on front_aux reception.
-**`steering.ts` now timestamps steering angle only**, not brake pressure.
-Brake pressure's receive time is `rpm_back.ts`, which advances with back_aux.
-Power has the joulemeter receive timestamp. GPS time is local completed RMC
+**`steering.ts` timestamps steering angle only**, not brake pressure.
+Brake pressure's sample time is `rpm_back.ts`, which advances with back_aux.
+Power has the joulemeter sample timestamp. GPS time is local completed RMC
 parse time. Cached values and their timestamps survive other nodes' updates.
 The legacy layout cannot represent separate validity flags or detailed freshness.
 
@@ -96,9 +96,10 @@ python3 telem/shm/test_vcan.py ./build/telem-shm/write_shm
 ```
 
 The test injects CHUDS CAN-FD frames and reads through the unchanged Python reader.
-It checks the 100-byte layout, RPM/ADC/current conversions, speed, motor NaNs,
-node timestamp independence, cached values, fragmented UART GPS ingestion through
-a pseudo-terminal, and clean shutdown. ADC coefficients
+It checks the 100-byte layout, RPM pass-through, ADC/current conversions, speed,
+motor NaNs, sensor timestamp preservation and rollover, node timestamp independence,
+cached values, fragmented UART GPS ingestion through a pseudo-terminal, and clean
+shutdown. ADC coefficients
 in this test are synthetic, not calibration.
 
 ## Hardware verification and next PR
@@ -114,8 +115,7 @@ fixes and SIGTERM shutdown. Record Pi model, OS/compiler, firmware revisions,
 coefficients, reference readings and test results before marking this verified.
 
 **Coordination is pending; no timeline or message definitions have been agreed.**
-During the first PR, contact elec / CHUDS maintainers to confirm 32 rising edges
-per revolution, timing assumptions, ADC calibration/units, current-offset bench
+During the first PR, contact elec / CHUDS maintainers to confirm ADC calibration/units, current-offset bench
 results, and whether motor RPM/duty cycle remain wanted vehicle telemetry.
 
 Prioritize Vehicle Controller support immediately after this migration. Aleena
