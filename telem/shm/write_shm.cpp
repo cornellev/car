@@ -2,6 +2,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -9,21 +10,23 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstring>
 #include <cstdlib>
-#include <mutex>
+#include <cstring>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <thread>
+
 #include "chuds/chuds.hpp"
 #include "chuds/socketcan_transport.hpp"
 
-constexpr float NANF = std::numeric_limits<float>::quiet_NaN();
+constexpr float NANF             = std::numeric_limits<float>::quiet_NaN();
 constexpr float wheel_diameter_m = 0.58166f;
-constexpr float lambda = 0.05f;
+constexpr float lambda           = 0.05f;
 static uint64_t now_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
 }
 // Explicit deployment calibration; missing ADC calibration stays invalid.
 static float setting(const char* name, float fallback) {
@@ -124,17 +127,17 @@ static volatile sig_atomic_t g_stop = 0;
 static void handle_sigint(int) { g_stop = 1; }
 
 class MasterShm {
-public:
+   public:
     explicit MasterShm(const char* interface) {
         if (!(edges_ > 0) || !(window_ms_ > 0)) {
             std::fprintf(stderr, "Wheel edges and window must be positive\n");
             return;
         }
-        cache_.power_snap = {0, NANF, NANF};
-        cache_.steering_snap = {0, NANF, NANF};
+        cache_.power_snap     = {0, NANF, NANF};
+        cache_.steering_snap  = {0, NANF, NANF};
         cache_.rpm_snap_front = cache_.rpm_snap_back = {0, NANF, NANF};
-        cache_.motor_snap = {0, NANF, NANF};
-        gps_cache_ = {0, NANF, NANF, NANF, NANF};
+        cache_.motor_snap                            = {0, NANF, NANF};
+        gps_cache_                                   = {0, NANF, NANF, NANF, NANF};
         if (!bus_.open(interface)) {
             std::fprintf(stderr, "Cannot open CAN-FD interface %s\n", interface);
             return;
@@ -145,15 +148,18 @@ public:
         if (gps_serial_ >= 0) gps_file_ = fdopen(gps_serial_, "r");
         if (gps_file_) {
             gps_started_ = true;
-            gps_thread_ = std::thread([this] { gps_loop(); });
-        } else std::perror("GPS UART unavailable");
+            gps_thread_  = std::thread([this] { gps_loop(); });
+        } else
+            std::perror("GPS UART unavailable");
         ok_ = true;
     }
     ~MasterShm() {
         stop_.store(true);
         if (gps_thread_.joinable()) gps_thread_.join();
-        if (gps_file_) fclose(gps_file_);
-        else if (gps_serial_ >= 0) close(gps_serial_);
+        if (gps_file_)
+            fclose(gps_file_);
+        else if (gps_serial_ >= 0)
+            close(gps_serial_);
         shutdown_shm();
     }
     bool ok() const { return ok_; }
@@ -174,41 +180,46 @@ public:
             auto now = steady_clock::now();
             if (now >= next) {
                 cache_.global_ts = now_us();
-                cache_.gps_snap = read_gps_cached();
+                cache_.gps_snap  = read_gps_cached();
                 const auto& rear = cache_.rpm_snap_back;
-                speed = filtered_speed(speed, (rear.rpm_left + rear.rpm_right) / 2);
+                speed            = filtered_speed(speed, (rear.rpm_left + rear.rpm_right) / 2);
                 cache_.filtered_snap.speed = speed;
                 write_snapshot(cache_);
-                do { next += milliseconds(5); } while (next <= now);
+                do {
+                    next += milliseconds(5);
+                } while (next <= now);
             }
             std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
     }
-private:
+
+   private:
     chuds::Bus<chuds::SocketCanTransport> bus_;
     SensorSnapshot cache_{};
     bool ok_{false};
     int shm_fd_{-1};
     SharedBlock* shm_{nullptr};
-    float speed = NANF;
-    float edges_ = setting("SHM_EDGES_PER_REV", 32);
-    float window_ms_ = setting("SHM_WINDOW_MS", 100);
-    float steer_scale_ = setting("SHM_STEERING_SCALE", NANF);
-    float steer_offset_ = setting("SHM_STEERING_OFFSET", NANF);
-    float brake_scale_ = setting("SHM_BRAKE_SCALE", NANF);
-    float brake_offset_ = setting("SHM_BRAKE_OFFSET", NANF);
+    float speed           = NANF;
+    float edges_          = setting("SHM_EDGES_PER_REV", 32);
+    float window_ms_      = setting("SHM_WINDOW_MS", 100);
+    float steer_scale_    = setting("SHM_STEERING_SCALE", NANF);
+    float steer_offset_   = setting("SHM_STEERING_OFFSET", NANF);
+    float brake_scale_    = setting("SHM_BRAKE_SCALE", NANF);
+    float brake_offset_   = setting("SHM_BRAKE_OFFSET", NANF);
     float current_offset_ = setting("SHM_CURRENT_OFFSET_A", 0);
     float rpm(uint16_t count) const { return count * 60000.0f / (edges_ * window_ms_); }
     void receive(const chuds::Message& m) {
         if (m.type != chuds::MsgType::Update) return;
         const auto ts = static_cast<uint32_t>(now_us());
         if (auto t = chuds::catalog_body<chuds::front_aux::Telemetry>(m)) {
-            cache_.rpm_snap_front = {ts, rpm(t->rpm_left), rpm(t->rpm_right)};
-            cache_.steering_snap.ts = ts; // front-node receive time only
-            cache_.steering_snap.turn_angle = t->steering <= 4095 ? t->steering * steer_scale_ + steer_offset_ : NANF;
+            cache_.rpm_snap_front   = {ts, rpm(t->rpm_left), rpm(t->rpm_right)};
+            cache_.steering_snap.ts = ts;  // front-node receive time only
+            cache_.steering_snap.turn_angle =
+                t->steering <= 4095 ? t->steering * steer_scale_ + steer_offset_ : NANF;
         } else if (auto t = chuds::catalog_body<chuds::back_aux::Telemetry>(m)) {
             cache_.rpm_snap_back = {ts, rpm(t->rpm_left), rpm(t->rpm_right)};
-            cache_.steering_snap.brake_pressure = t->brake <= 4095 ? t->brake * brake_scale_ + brake_offset_ : NANF;
+            cache_.steering_snap.brake_pressure =
+                t->brake <= 4095 ? t->brake * brake_scale_ + brake_offset_ : NANF;
         } else if (auto t = chuds::catalog_body<chuds::joulemeter::Telemetry>(m)) {
             cache_.power_snap = {ts, t->current + current_offset_, t->voltage};
         }
@@ -221,8 +232,14 @@ private:
     FILE* gps_file_{nullptr};
     bool gps_started_{false};
     int gps_serial_{-1};
-    void publish_gps(const GPS& g) { std::lock_guard lock(gps_mutex_); gps_cache_ = g; }
-    GPS read_gps_cached() { std::lock_guard lock(gps_mutex_); return gps_cache_; }
+    void publish_gps(const GPS& g) {
+        std::lock_guard lock(gps_mutex_);
+        gps_cache_ = g;
+    }
+    GPS read_gps_cached() {
+        std::lock_guard lock(gps_mutex_);
+        return gps_cache_;
+    }
     bool init_shm() {
         shm_fd_ = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
         if (shm_fd_ < 0) {
@@ -382,7 +399,6 @@ private:
 
         return lambda * meas_speed + (1.0f - lambda) * old_speed;
     }
-
 };
 int main(int argc, char** argv) {
     if (argc > 2 || (argc == 2 && std::strcmp(argv[1], "--help") == 0)) {
