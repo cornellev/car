@@ -132,3 +132,20 @@ new measurements, timestamps and validity, with tests for partial updates,
 dropouts and compatibility. Keep UART GPS until the new GPS interface has been
 bench validated; then migrate it with an explicit source/validity policy.
 Body commands and STOP handling remain outside this writer's scope.
+
+## Receive diagnostics
+
+The writer logs startup, missing calibration, and each accepted telemetry message
+with its node, decoded values and board timestamp to stderr. Once per second it
+prints cumulative accepted-message counts for each node, ignored messages and
+receive errors. Zero node counts indicate no matching telemetry received since
+startup. The first five ignored messages include class, node, type and body size
+so catalog mismatches are visible; the first five receive errors include the
+transport error number. Later errors remain visible in the totals.
+
+Set `SHM_LOG_RX=0` to disable per-message logs while keeping startup, diagnostics
+and the one-second totals:
+
+```sh
+SHM_LOG_RX=0 ./build/telem-shm/write_shm can0
+```

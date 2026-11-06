@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <csignal>
 #include <cstddef>
@@ -138,7 +139,14 @@ class MasterShm {
             std::fprintf(stderr, "Cannot open CAN-FD interface %s\n", interface);
             return;
         }
+        std::fprintf(stderr, "CAN-FD interface %s opened\n", interface);
         if (!init_shm()) return;
+        std::fprintf(stderr, "Publishing %s (%zu bytes) at 200 Hz; telemetry logs %s\n", SHM_NAME,
+                     sizeof(SharedBlock), log_rx_ ? "on" : "off");
+        if (!std::isfinite(steer_scale_) || !std::isfinite(steer_offset_))
+            std::fprintf(stderr, "Steering calibration missing: angle will be NaN\n");
+        if (!std::isfinite(brake_scale_) || !std::isfinite(brake_offset_))
+            std::fprintf(stderr, "Brake calibration missing: pressure will be NaN\n");
         const char* gps_path = std::getenv("SHM_GPS_DEVICE");
         gps_serial_ = open(gps_path ? gps_path : "/dev/serial0", O_RDONLY | O_NOCTTY | O_NONBLOCK);
         if (gps_serial_ >= 0) gps_file_ = fdopen(gps_serial_, "r");
@@ -161,19 +169,32 @@ class MasterShm {
     bool ok() const { return ok_; }
     void spin() {
         using namespace std::chrono;
-        auto next = steady_clock::now();
+        auto next     = steady_clock::now();
+        auto next_log = next + seconds(1);
         while (!g_stop) {
             // Bound receive work so a saturated bus cannot starve publication.
             for (int i = 0; i < 256; ++i) {
                 auto rx = bus_.recv();
                 if (!rx) {
-                    if (rx.error() != chuds::RxError::Empty) ++cache_.errcount;
+                    if (rx.error() != chuds::RxError::Empty) {
+                        ++cache_.errcount;
+                        if (cache_.errcount <= 5)
+                            std::fprintf(stderr, "CAN receive error %u (total %u)\n",
+                                         static_cast<unsigned>(rx.error()), cache_.errcount);
+                    }
                     break;
                 }
                 receive(*rx);
                 if (steady_clock::now() >= next) break;
             }
             auto now = steady_clock::now();
+            if (now >= next_log) {
+                std::fprintf(stderr,
+                             "CAN totals: front_aux=%" PRIu64 " back_aux=%" PRIu64
+                             " joulemeter=%" PRIu64 " ignored=%" PRIu64 " errors=%u\n",
+                             front_rx_, back_rx_, power_rx_, ignored_rx_, cache_.errcount);
+                next_log = now + seconds(1);
+            }
             if (now >= next) {
                 cache_.global_ts = now_us();
                 cache_.gps_snap  = read_gps_cached();
@@ -192,6 +213,8 @@ class MasterShm {
    private:
     chuds::Bus<chuds::SocketCanTransport> bus_;
     SensorSnapshot cache_{};
+    bool log_rx_ = !std::getenv("SHM_LOG_RX") || std::strcmp(std::getenv("SHM_LOG_RX"), "0") != 0;
+    std::uint64_t front_rx_{}, back_rx_{}, power_rx_{}, ignored_rx_{};
     bool ok_{false};
     int shm_fd_{-1};
     SharedBlock* shm_{nullptr};
@@ -202,20 +225,36 @@ class MasterShm {
     float brake_offset_   = setting("SHM_BRAKE_OFFSET", NANF);
     float current_offset_ = setting("SHM_CURRENT_OFFSET_A", 0);
     void receive(const chuds::Message& m) {
-        if (m.type != chuds::MsgType::Update) return;
         if (auto t = chuds::catalog_body<chuds::front_aux::Telemetry>(m)) {
+            ++front_rx_;
             cache_.rpm_snap_front   = {t->ts, static_cast<float>(t->rpm_left),
                                        static_cast<float>(t->rpm_right)};
             cache_.steering_snap.ts = t->ts;  // front-node sample time only
             cache_.steering_snap.turn_angle =
                 t->steering <= 4095 ? t->steering * steer_scale_ + steer_offset_ : NANF;
         } else if (auto t = chuds::catalog_body<chuds::back_aux::Telemetry>(m)) {
+            ++back_rx_;
             cache_.rpm_snap_back = {t->ts, static_cast<float>(t->rpm_left),
                                     static_cast<float>(t->rpm_right)};
             cache_.steering_snap.brake_pressure =
                 t->brake <= 4095 ? t->brake * brake_scale_ + brake_offset_ : NANF;
         } else if (auto t = chuds::catalog_body<chuds::joulemeter::Telemetry>(m)) {
+            ++power_rx_;
             cache_.power_snap = {t->ts, t->current + current_offset_, t->voltage};
+        } else {
+            ++ignored_rx_;
+            if (ignored_rx_ <= 5)
+                std::fprintf(stderr,
+                             "CAN ignored: class=%u node=0x%02x type=%u body_bytes=%u "
+                             "(unsupported message or catalog size mismatch)\n",
+                             static_cast<unsigned>(m.cls), m.subaddress,
+                             static_cast<unsigned>(m.type), m.body_len);
+            return;
+        }
+        if (log_rx_) {
+            char line[160];
+            chuds::format_message(m, line);
+            std::fprintf(stderr, "CAN RX: %s\n", line);
         }
     }
     std::mutex gps_mutex_;
