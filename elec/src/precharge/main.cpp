@@ -36,8 +36,8 @@ namespace {
 // Nothing energizes until arm() succeeds. Once g_locked is set (e-stop ISR while armed,
 // or a FAULT / ESTOP), nothing energizes again until reset.
 // ---------------------------------------------------------------------------
-volatile bool g_armed      = false;
-volatile bool g_locked     = false;
+volatile bool g_armed = false;
+volatile bool g_locked = false;
 std::uint16_t g_level_full = 0;
 std::uint16_t g_level_hold = 0;
 
@@ -51,10 +51,10 @@ void relays_init() {
     // PWM slice ready at level 0; the pin stays on SIO (low) until set_outputs hands it over.
     const std::uint32_t wrap = clock_get_hz(clk_sys) / kMainPwmHz - 1;
     hard_assert(wrap > 100 && wrap < 65535);
-    g_level_full         = static_cast<std::uint16_t>(wrap + 1);  // above wrap: always high
-    g_level_hold         = static_cast<std::uint16_t>((wrap + 1) * kMainHoldDutyPct / 100);
+    g_level_full = static_cast<std::uint16_t>(wrap + 1);  // above wrap: always high
+    g_level_hold = static_cast<std::uint16_t>((wrap + 1) * kMainHoldDutyPct / 100);
     const unsigned slice = pwm_gpio_to_slice_num(kMainRelayPin);
-    pwm_config cfg       = pwm_get_default_config();
+    pwm_config cfg = pwm_get_default_config();
     pwm_config_set_wrap(&cfg, static_cast<std::uint16_t>(wrap));
     pwm_init(slice, &cfg, false);
     pwm_set_gpio_level(kMainRelayPin, 0);
@@ -67,7 +67,7 @@ void set_outputs(Main main, bool ssr) {
     const std::uint32_t irq = save_and_disable_interrupts();
     if (!g_armed || g_locked) {
         main = Main::Off;
-        ssr  = false;
+        ssr = false;
     }
     gpio_put(kSsrPin, ssr);
     if (main == Main::Off) {
@@ -95,7 +95,7 @@ void arm() {
 void __not_in_flash_func(kill_outputs)() {
     if (g_armed) g_locked = true;
     io_bank0_hw->io[kMainRelayPin].ctrl = GPIO_FUNC_SIO << IO_BANK0_GPIO0_CTRL_FUNCSEL_LSB;
-    sio_hw->gpio_clr                    = (1u << kMainRelayPin) | (1u << kSsrPin);
+    sio_hw->gpio_clr = (1u << kMainRelayPin) | (1u << kSsrPin);
 }
 
 // ---------------------------------------------------------------------------
@@ -106,10 +106,10 @@ volatile std::uint32_t g_estop_edges = 0;
 
 // The exclusive IO_BANK0 handler, so the vector points straight at this RAM function.
 void __not_in_flash_func(estop_isr)() {
-    const unsigned reg         = kEstopPin / 8;
-    const unsigned shift       = 4 * (kEstopPin % 8);
+    const unsigned reg = kEstopPin / 8;
+    const unsigned shift = 4 * (kEstopPin % 8);
     const std::uint32_t events = (io_bank0_hw->proc0_irq_ctrl.ints[reg] >> shift) & 0xFu;
-    io_bank0_hw->intr[reg]     = events << shift;  // acknowledge
+    io_bank0_hw->intr[reg] = events << shift;  // acknowledge
     if (events & GPIO_IRQ_EDGE_FALL) {
         kill_outputs();
         g_estop_edges = g_estop_edges + 1;
@@ -129,18 +129,12 @@ void estop_init() {
 // Voltage sensing: discard one sample after switching the ADC input (it can still hold
 // charge from the other channel), then average.
 // ---------------------------------------------------------------------------
-struct Reading {
-    float volts;
-    bool saturated;
-};
-
-Reading read_volts(unsigned adc_input, float div_ratio) {
+float read_volts(unsigned adc_input, float div_ratio) {
     adc_select_input(adc_input);
     static_cast<void>(adc_read());
     std::uint32_t sum = 0;
     for (int i = 0; i < kAdcSamples; ++i) sum += adc_read();
-    const float avg = static_cast<float>(sum) / kAdcSamples;
-    return {avg * (kAdcVref / 4096.0f) * div_ratio, avg >= kAdcSatCounts};
+    return static_cast<float>(sum) / kAdcSamples * (kAdcVref / 4096.0f) * div_ratio;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,18 +143,18 @@ Reading read_volts(unsigned adc_input, float div_ratio) {
 // ---------------------------------------------------------------------------
 bool led_on(State s, Fault f, std::uint64_t ms) {
     switch (s) {
-        case State::Init: return false;
-        case State::WaitEstopClear:
-        case State::WaitStart: return ms % 1000 < 500;
-        case State::Precharge:
-        case State::CloseMain: return ms % 200 < 100;
-        case State::Run: return true;
-        case State::Estop: return ms % 100 < 50;
-        case State::Fault: {
-            const std::uint64_t n     = static_cast<std::uint64_t>(f);
-            const std::uint64_t phase = ms % (n * 400 + 2000);
-            return phase < n * 400 && phase % 400 < 200;
-        }
+    case State::Init:           return false;
+    case State::WaitEstopClear:
+    case State::WaitStart:      return ms % 1000 < 500;
+    case State::Precharge:
+    case State::CloseMain:      return ms % 200 < 100;
+    case State::Run:            return true;
+    case State::Estop:          return ms % 100 < 50;
+    case State::Fault: {
+        const std::uint64_t n = static_cast<std::uint64_t>(f);
+        const std::uint64_t phase = ms % (n * 400 + 2000);
+        return phase < n * 400 && phase % 400 < 200;
+    }
     }
     return false;
 }
@@ -206,23 +200,22 @@ int main() {
 
     precharge::Controller sm{watchdog_reboot, kDevMode, now_ms()};
     cev::Interval report{kReportPeriodMs};
-    std::uint32_t seen_edges   = g_estop_edges;
-    bool check_edge_level      = false;
+    std::uint32_t seen_edges = g_estop_edges;
+    bool check_edge_level = false;
     std::uint64_t next_tick_us = time_us_64();
 
     while (true) {
         const std::uint64_t ms = now_ms();
-        const Reading batt     = read_volts(kBattAdcInput, kBattDivRatio);
-        const Reading bus      = read_volts(kBusAdcInput, kBusDivRatio);
+        const float batt = read_volts(kBattAdcInput, kBattDivRatio);
+        const float bus = read_volts(kBusAdcInput, kBusDivRatio);
         const precharge::Inputs in{
-            .now_ms        = ms,
-            .batt_v        = batt.volts,
-            .bus_v         = bus.volts,
-            .saturated     = batt.saturated || bus.saturated,
-            .estop_low     = !gpio_get(kEstopPin),
+            .now_ms = ms,
+            .batt_v = batt,
+            .bus_v = bus,
+            .estop_low = !gpio_get(kEstopPin),
             .estop_latched = g_locked,
-            .armed         = g_armed,
-            .start_cmd     = start_requested(),
+            .armed = g_armed,
+            .start_cmd = start_requested(),
         };
 
         const precharge::Outputs out = sm.step(in);
@@ -241,7 +234,7 @@ int main() {
             check_edge_level = false;
         }
         if (g_estop_edges != seen_edges) {
-            seen_edges       = g_estop_edges;
+            seen_edges = g_estop_edges;
             check_edge_level = true;
             std::printf("[%llu] E-STOP edge in %s\n", static_cast<unsigned long long>(ms),
                         precharge::name(sm.state));
@@ -250,26 +243,24 @@ int main() {
             std::printf("[%llu] %s -> %s\n", static_cast<unsigned long long>(ms),
                         precharge::name(sm.prev_state), precharge::name(sm.state));
             if (sm.state == State::CloseMain) {
-                std::printf("  precharge took %lu ms\n",
-                            static_cast<unsigned long>(sm.precharge_ms));
+                std::printf("  precharge took %lu ms\n", static_cast<unsigned long>(sm.precharge_ms));
             }
             if (sm.state == State::Fault) {
                 std::printf("  FAULT %d %s: %.2f (batt %.2f V, bus %.2f V)\n",
                             static_cast<int>(sm.fault), precharge::name(sm.fault),
-                            static_cast<double>(sm.fault_value), static_cast<double>(batt.volts),
-                            static_cast<double>(bus.volts));
+                            static_cast<double>(sm.fault_value), static_cast<double>(batt),
+                            static_cast<double>(bus));
                 if (sm.fault == Fault::Stall) {
-                    std::printf(
-                        "  bus load ~%.1f mA\n",
-                        static_cast<double>((batt.volts - bus.volts) / kPrechargeOhm * 1000.0f));
+                    std::printf("  bus load ~%.1f mA\n",
+                                static_cast<double>((batt - bus) / kPrechargeOhm * 1000.0f));
                 }
             }
         }
         if (report.due()) {
             std::printf("%s batt=%.2f bus=%.2f estop=%s%s\n", precharge::name(sm.state),
-                        static_cast<double>(batt.volts), static_cast<double>(bus.volts),
-                        in.estop_low ? "LOW" : "ok",
-                        kDevMode && sm.state == State::WaitStart ? "  (send g to start)" : "");
+                        static_cast<double>(batt), static_cast<double>(bus),
+                        in.estop_low ? "LOW" : "ok", kDevMode && sm.state == State::WaitStart
+                                                         ? "  (send g to start)" : "");
         }
         gpio_put(kStatusLed, led_on(sm.state, sm.fault, ms));
 
