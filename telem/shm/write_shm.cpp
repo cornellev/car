@@ -1,178 +1,44 @@
 #include <fcntl.h>
-#include <linux/spi/spidev.h>
-#include <pigpiod_if2.h>
-#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
-
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <mutex>
+#include <limits>
 #include <string>
 #include <thread>
-#include <vector>
+#include "chuds/chuds.hpp"
+#include "chuds/socketcan_transport.hpp"
 
-// #include "lib/arduPi.h"
-// #include "lib/sim7x00.h"
-
-constexpr uint8_t GPS_POWERKEY = 8;
-
-static constexpr uint8_t FLAG_BYTE = 0x7E;
-static constexpr int SPI_READ_MAX  = 64;  // >= worst-case frame
-
-// constexpr uint8_t SPI_MODE = 1;         // CPOL=0, CPHA=1
-constexpr uint8_t SPI_MODE       = SPI_MODE_1 | SPI_CS_HIGH;  // CPOL=0, CPHA=1, CS active high
-constexpr uint32_t SPI_SPEED     = 1000000;                   // 1 MHz
-constexpr const char* SPI_DEVICE = "/dev/spidev0.0";
-
-static constexpr int CS_PINS[5] = {27, 23, 25, 24, 26};
-static constexpr int SENSOR_EN  = 17;
-static constexpr int POWER_EN   = 19;
-
+constexpr float NANF = std::numeric_limits<float>::quiet_NaN();
 constexpr float wheel_diameter_m = 0.58166f;
-constexpr float lambda           = 0.05f;
-
-// Boards:
-// RPM (fl, fr), RPM (bl, br), Joulemeter (current, voltage), Steering (brake pressure, steer angle), Motor (rpm, duty cycle)
-// 27 - Power
-// 23 - Steering
-// 25 - RPM front
-// 24 - RPM back
-// 26 - Motor
-
-constexpr float NANF = (std::nanf("1"));
-
-static inline uint64_t now_us() {
-    timespec ts{};
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return uint64_t(ts.tv_sec) * 1000000ULL + uint64_t(ts.tv_nsec) / 1000ULL;
+constexpr float lambda = 0.05f;
+static uint64_t now_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-
-static uint32_t crc32_ieee(const uint8_t* data, size_t len) {
-    uint32_t crc = 0xFFFFFFFFu;
-    for (size_t i = 0; i < len; i++) {
-        crc ^= data[i];
-        for (int j = 0; j < 8; j++) {
-            crc = (crc & 1u) ? ((crc >> 1) ^ 0xEDB88320u) : (crc >> 1);
-        }
+// Explicit deployment calibration; missing ADC calibration stays invalid.
+static float setting(const char* name, float fallback) {
+    const char* value = std::getenv(name);
+    if (!value) return fallback;
+    char* end{};
+    float result = std::strtof(value, &end);
+    if (end == value || *end || !std::isfinite(result)) {
+        std::fprintf(stderr, "Invalid %s\n", name);
+        std::exit(1);
     }
-    return ~crc;
+    return result;
 }
-
-static inline uint32_t u32_le_bytes(const uint8_t* p) {
-    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static inline float f32_le_bytes(const uint8_t* p) {
-    uint32_t bits = u32_le_bytes(p);
-    float out;
-    std::memcpy(&out, &bits, sizeof(out));
-    return out;
-}
-
-static inline uint8_t get_bit_msb(const std::vector<uint8_t>& data, int bit_index) {
-    const int byte_i = bit_index >> 3;
-    const int bit_i  = bit_index & 7;
-    if (byte_i < 0 || (size_t)byte_i >= data.size()) return 0;
-    return (data[(size_t)byte_i] >> (7 - bit_i)) & 1u;
-}
-
-static bool find_two_flags(const std::vector<uint8_t>& rx, int* first_flag_end_bit,
-                           int* second_flag_end_bit) {
-    *first_flag_end_bit  = -1;
-    *second_flag_end_bit = -1;
-
-    uint8_t sh      = 0;
-    const int nbits = (int)rx.size() * 8;
-
-    for (int bi = 0; bi < nbits; bi++) {
-        sh = (uint8_t)((sh << 1) | get_bit_msb(rx, bi));
-        if (sh == FLAG_BYTE) {
-            if (*first_flag_end_bit < 0) {
-                *first_flag_end_bit = bi;  // last bit of first flag
-                sh                  = 0;
-            } else {
-                *second_flag_end_bit = bi;  // last bit of second flag
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-static bool bit_unstuff_range(const std::vector<uint8_t>& in, int start_bit, int end_bit_exclusive,
-                              uint8_t* out, size_t out_cap_bytes, size_t* out_bitpos) {
-    int ones = 0;
-
-    for (int bi = start_bit; bi < end_bit_exclusive && *out_bitpos < out_cap_bytes * 8; bi++) {
-        const uint8_t bit = get_bit_msb(in, bi);
-
-        // If we've already seen five 1s, this bit MUST be a stuffed 0 and must be skipped.
-        if (ones == 5) {
-            if (bit != 0) return false;  // invalid stuffing
-            ones = 0;
-            continue;
-        }
-
-        const size_t byte_i = (*out_bitpos) >> 3;
-        const size_t bit_i  = (*out_bitpos) & 7;
-        if (byte_i >= out_cap_bytes) return false;
-
-        if (bit) out[byte_i] |= (uint8_t)(1u << (7 - bit_i));
-        (*out_bitpos)++;
-
-        if (bit)
-            ones++;
-        else
-            ones = 0;
-    }
-
-    return true;
-}
-
-static bool decode_frame(const std::vector<uint8_t>& rx, size_t payload_len,
-                         std::vector<uint8_t>& payload_out) {
-    payload_out.clear();
-    if (payload_len == 0) return false;
-
-    // Find flags and compute where the data bits are.
-    int first_flag_end_bit;
-    int second_flag_end_bit;
-    if (!find_two_flags(rx, &first_flag_end_bit, &second_flag_end_bit)) return false;
-
-    const int data_start_bit         = first_flag_end_bit + 1;
-    const int data_end_bit_exclusive = second_flag_end_bit - 7;
-
-    if (data_end_bit_exclusive <= data_start_bit) return false;
-
-    const size_t want_bytes = payload_len + 4;  // payload + crc32
-
-    // Unstuff bits in the data range into out[], which should now contain payload || crc_le
-    std::vector<uint8_t> out(want_bytes, 0);
-    size_t out_bitpos = 0;
-    if (!bit_unstuff_range(rx, data_start_bit, data_end_bit_exclusive, out.data(), out.size(),
-                           &out_bitpos)) {
-        return false;
-    }
-
-    if (out_bitpos < want_bytes * 8) return false;
-
-    // Check CRC
-    const uint32_t crc_rx = u32_le_bytes(out.data() + payload_len);
-    const uint32_t crc_ok = crc32_ieee(out.data(), payload_len);
-    if (crc_rx != crc_ok) return false;
-
-    payload_out.assign(out.begin(), out.begin() + (ptrdiff_t)payload_len);
-    return true;
-}
-
 #pragma pack(push, 1)
-struct Power {  // All from Power Pico
+struct Power {
     uint32_t ts;
     float current;
     float voltage;
@@ -180,7 +46,7 @@ struct Power {  // All from Power Pico
 #pragma pack(pop)
 
 #pragma pack(push, 1)
-struct Steering {  // All from Steering Pico
+struct Steering {  // Front steering and rear brake
     uint32_t ts;
     float brake_pressure;
     float turn_angle;
@@ -188,7 +54,7 @@ struct Steering {  // All from Steering Pico
 #pragma pack(pop)
 
 #pragma pack(push, 1)
-struct RPM {  // All from RPM Picos
+struct RPM {
     uint32_t ts;
     float rpm_left;
     float rpm_right;
@@ -206,7 +72,7 @@ struct GPS {  // All from GPS thread reading SIM7600
 #pragma pack(pop)
 
 #pragma pack(push, 1)
-struct Motor {  // All from Motor Pico
+struct Motor {
     uint32_t ts;
     float rpm;
     float duty_cycle;
@@ -254,136 +120,109 @@ static_assert(sizeof(SharedBlock) == 100);
 
 static constexpr const char* SHM_NAME = "/sensor_shm";
 
-// Ctrl+C flag
 static volatile sig_atomic_t g_stop = 0;
 static void handle_sigint(int) { g_stop = 1; }
 
 class MasterShm {
-   public:
-    MasterShm() {
-        pi_ = pigpio_start(nullptr, nullptr);
-        if (pi_ < 0) {
-            std::fprintf(stderr, "Failed to connect to pigpiod\n");
+public:
+    explicit MasterShm(const char* interface) {
+        if (!(edges_ > 0) || !(window_ms_ > 0)) {
+            std::fprintf(stderr, "Wheel edges and window must be positive\n");
             return;
         }
-        std::fprintf(stderr, "pigpio initialized\n");
-
-        for (int i = 0; i < 5; i++) {
-            set_mode(pi_, CS_PINS[i], PI_OUTPUT);
-        }
-        deselect_all_cs();
-
-        set_mode(pi_, SENSOR_EN, PI_OUTPUT);
-        set_mode(pi_, POWER_EN, PI_OUTPUT);
-
-        spi_fd_ = open(SPI_DEVICE, O_RDWR);
-        if (spi_fd_ < 0) {
-            std::perror("open spidev");
+        cache_.power_snap = {0, NANF, NANF};
+        cache_.steering_snap = {0, NANF, NANF};
+        cache_.rpm_snap_front = cache_.rpm_snap_back = {0, NANF, NANF};
+        cache_.motor_snap = {0, NANF, NANF};
+        gps_cache_ = {0, NANF, NANF, NANF, NANF};
+        if (!bus_.open(interface)) {
+            std::fprintf(stderr, "Cannot open CAN-FD interface %s\n", interface);
             return;
         }
-
-        uint8_t mode = SPI_MODE;
-        if (ioctl(spi_fd_, SPI_IOC_WR_MODE, &mode) < 0) {
-            std::perror("SPI_IOC_WR_MODE");
-            return;
-        }
-
-        uint32_t speed = SPI_SPEED;
-        if (ioctl(spi_fd_, SPI_IOC_WR_MAX_SPEED_HZ, &speed) < 0) {
-            std::perror("SPI_IOC_WR_MAX_SPEED_HZ");
-            return;
-        }
-
-        std::fprintf(stderr, "SPI device initialized\n");
-
-        if (!init_shm()) {
-            std::fprintf(stderr, "Shared memory init failed; continuing without SHM\n");
-            // still allow SPI to run if desired
-        }
-
-        ok_ = true;
-
-        init_gps();
-    }
-
-    ~MasterShm() {
-        stop_.store(true, std::memory_order_relaxed);
-        if (gps_thread_.joinable()) gps_thread_.join();
-
+        if (!init_shm()) return;
+        const char* gps_path = std::getenv("SHM_GPS_DEVICE");
+        gps_serial_ = open(gps_path ? gps_path : "/dev/serial0", O_RDONLY | O_NOCTTY | O_NONBLOCK);
+        if (gps_serial_ >= 0) gps_file_ = fdopen(gps_serial_, "r");
         if (gps_file_) {
-            fclose(gps_file_);
-            gps_file_   = nullptr;
-            gps_serial_ = -1;
-        } else if (gps_serial_ >= 0) {
-            close(gps_serial_);
-            gps_serial_ = -1;
-        }
-
+            gps_started_ = true;
+            gps_thread_ = std::thread([this] { gps_loop(); });
+        } else std::perror("GPS UART unavailable");
+        ok_ = true;
+    }
+    ~MasterShm() {
+        stop_.store(true);
+        if (gps_thread_.joinable()) gps_thread_.join();
+        if (gps_file_) fclose(gps_file_);
+        else if (gps_serial_ >= 0) close(gps_serial_);
         shutdown_shm();
-        if (spi_fd_ >= 0) close(spi_fd_);
-        if (pi_ >= 0) pigpio_stop(pi_);
     }
-
     bool ok() const { return ok_; }
-
-    // Spin calls timer_callback at every interval microseconds until SIGNINT.
-    void spin(int interval) {
+    void spin() {
+        using namespace std::chrono;
+        auto next = steady_clock::now();
         while (!g_stop) {
-            timer_callback();
-            usleep(interval);
+            // Bound receive work so a saturated bus cannot starve publication.
+            for (int i = 0; i < 256; ++i) {
+                auto rx = bus_.recv();
+                if (!rx) {
+                    if (rx.error() != chuds::RxError::Empty) ++cache_.errcount;
+                    break;
+                }
+                receive(*rx);
+                if (steady_clock::now() >= next) break;
+            }
+            auto now = steady_clock::now();
+            if (now >= next) {
+                cache_.global_ts = now_us();
+                cache_.gps_snap = read_gps_cached();
+                const auto& rear = cache_.rpm_snap_back;
+                speed = filtered_speed(speed, (rear.rpm_left + rear.rpm_right) / 2);
+                cache_.filtered_snap.speed = speed;
+                write_snapshot(cache_);
+                do { next += milliseconds(5); } while (next <= now);
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
-        std::fprintf(stderr, "SIGINT received, exiting...\n");
     }
-
-   private:
-    int pi_{-1};
-    int spi_fd_{-1};
+private:
+    chuds::Bus<chuds::SocketCanTransport> bus_;
+    SensorSnapshot cache_{};
     bool ok_{false};
-
     int shm_fd_{-1};
     SharedBlock* shm_{nullptr};
-
-    int errcount = 0;
-    float speed  = NANF;
-
-    // GPS thread
-    std::atomic<uint32_t> gps_seq_{0};
+    float speed = NANF;
+    float edges_ = setting("SHM_EDGES_PER_REV", 32);
+    float window_ms_ = setting("SHM_WINDOW_MS", 100);
+    float steer_scale_ = setting("SHM_STEERING_SCALE", NANF);
+    float steer_offset_ = setting("SHM_STEERING_OFFSET", NANF);
+    float brake_scale_ = setting("SHM_BRAKE_SCALE", NANF);
+    float brake_offset_ = setting("SHM_BRAKE_OFFSET", NANF);
+    float current_offset_ = setting("SHM_CURRENT_OFFSET_A", 0);
+    float rpm(uint16_t count) const { return count * 60000.0f / (edges_ * window_ms_); }
+    void receive(const chuds::Message& m) {
+        if (m.type != chuds::MsgType::Update) return;
+        const auto ts = static_cast<uint32_t>(now_us());
+        if (auto t = chuds::catalog_body<chuds::front_aux::Telemetry>(m)) {
+            cache_.rpm_snap_front = {ts, rpm(t->rpm_left), rpm(t->rpm_right)};
+            cache_.steering_snap.ts = ts; // front-node receive time only
+            cache_.steering_snap.turn_angle = t->steering <= 4095 ? t->steering * steer_scale_ + steer_offset_ : NANF;
+        } else if (auto t = chuds::catalog_body<chuds::back_aux::Telemetry>(m)) {
+            cache_.rpm_snap_back = {ts, rpm(t->rpm_left), rpm(t->rpm_right)};
+            cache_.steering_snap.brake_pressure = t->brake <= 4095 ? t->brake * brake_scale_ + brake_offset_ : NANF;
+        } else if (auto t = chuds::catalog_body<chuds::joulemeter::Telemetry>(m)) {
+            cache_.power_snap = {ts, t->current + current_offset_, t->voltage};
+        }
+    }
+    std::mutex gps_mutex_;
     GPS gps_cache_{};
     std::thread gps_thread_;
     std::atomic<bool> stop_{false};
+    std::string gps_line_;
     FILE* gps_file_{nullptr};
     bool gps_started_{false};
     int gps_serial_{-1};
-
-    void init_gps() {
-        gps_serial_ = open("/dev/serial0", O_RDONLY | O_NOCTTY);
-        if (gps_serial_ < 0) {
-            std::perror("Failed to open GPS serial");
-            return;
-        }
-
-        gps_file_ = fdopen(gps_serial_, "r");
-        if (!gps_file_) {
-            std::perror("fdopen failed");
-            close(gps_serial_);
-            gps_serial_ = -1;
-            return;
-        }
-
-        std::fprintf(stdout, "GPS fd: %d\n", gps_serial_);
-
-        GPS g{};
-        g.ts       = 0;
-        g.gps_lat  = NANF;
-        g.gps_long = NANF;
-        g.heading  = NANF;
-        g.speed    = NANF;
-        publish_gps(g);
-
-        gps_started_ = true;
-        gps_thread_  = std::thread([this]() { this->gps_loop(); });
-    }
-
+    void publish_gps(const GPS& g) { std::lock_guard lock(gps_mutex_); gps_cache_ = g; }
+    GPS read_gps_cached() { std::lock_guard lock(gps_mutex_); return gps_cache_; }
     bool init_shm() {
         shm_fd_ = shm_open(SHM_NAME, O_CREAT | O_RDWR, 0666);
         if (shm_fd_ < 0) {
@@ -432,80 +271,29 @@ class MasterShm {
         if (!shm_) return;
         uint32_t s = shm_->seq.load(std::memory_order_relaxed);
         shm_->seq.store(s + 1, std::memory_order_release);  // odd => write in progress
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         shm_->data = snap;                                  // plain memcpy-able struct
         shm_->seq.store(s + 2, std::memory_order_release);  // even => stable
-    }
-
-    void select_cs(int chipSelect) {
-        for (int i = 1; i < 6; i++) {
-            gpio_write(pi_, CS_PINS[i - 1], chipSelect == i ? 1 : 0);
-        }
-
-        gpio_write(pi_, SENSOR_EN, (chipSelect == 2 || chipSelect == 4) ? 1 : 0);
-        gpio_write(pi_, POWER_EN, (chipSelect == 1 || chipSelect == 5) ? 1 : 0);
-    }
-
-    void deselect_all_cs() {
-        for (int i = 1; i < 6; i++) {
-            gpio_write(pi_, CS_PINS[i - 1], 0);
-        }
-
-        gpio_write(pi_, SENSOR_EN, 0);
-        gpio_write(pi_, POWER_EN, 0);
-    }
-
-    // Reads a frame from the given chip select and decodes the payload. Returns empty vector on
-    // failure.
-    std::vector<uint8_t> readFramePayload(int chipSelect, size_t payload_len) {
-        select_cs(chipSelect);
-
-        std::vector<uint8_t> tx(SPI_READ_MAX, 0x00);
-        std::vector<uint8_t> rx(SPI_READ_MAX, 0x00);
-
-        spi_ioc_transfer t{};
-        t.tx_buf        = reinterpret_cast<unsigned long>(tx.data());
-        t.rx_buf        = reinterpret_cast<unsigned long>(rx.data());
-        t.len           = static_cast<uint32_t>(rx.size());
-        t.speed_hz      = SPI_SPEED;
-        t.bits_per_word = 8;
-
-        if (ioctl(spi_fd_, SPI_IOC_MESSAGE(1), &t) < 0) {
-            std::perror("SPI transfer failed");
-        }
-
-        deselect_all_cs();
-
-        std::vector<uint8_t> payload;
-        if (!decode_frame(rx, payload_len, payload)) {
-            payload.clear();
-        }
-        return payload;
-    }
-
-    // GPS helpers, lowk should be in a separate class but whatever
-    inline void publish_gps(const GPS& g) {
-        uint32_t s = gps_seq_.load(std::memory_order_relaxed);
-        gps_seq_.store(s + 1, std::memory_order_release);  // odd => write in progress
-        gps_cache_ = g;
-        gps_seq_.store(s + 2, std::memory_order_release);  // even => stable
-    }
-
-    inline GPS read_gps_cached() {
-        GPS g{};  // This is fine because if we never return empty GPS (failed read uses cache)
-        while (true) {
-            uint32_t s1 = gps_seq_.load(std::memory_order_acquire);
-            if (s1 & 1) continue;  // writer in progress
-            g           = gps_cache_;
-            uint32_t s2 = gps_seq_.load(std::memory_order_acquire);
-            if (s1 == s2) return g;
-        }
     }
 
     bool poll_gps_once(GPS& out) {
         if (!gps_started_ || !gps_file_) return false;
 
         char line[512];
-        if (!fgets(line, sizeof(line), gps_file_)) return false;
+        // Accumulate partial UART reads across EAGAIN without blocking shutdown.
+        char byte;
+        while (!stop_.load(std::memory_order_relaxed)) {
+            if (::read(gps_serial_, &byte, 1) != 1) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                return false;
+            }
+            if (byte == '\n') break;
+            gps_line_ += byte;
+            if (gps_line_.size() >= sizeof(line)) gps_line_.clear();
+        }
+        if (stop_.load(std::memory_order_relaxed)) return false;
+        std::snprintf(line, sizeof(line), "%s", gps_line_.c_str());
+        gps_line_.clear();
 
         if (std::strncmp(line, "$GNRMC,", 7) != 0 && std::strncmp(line, "$GPRMC,", 7) != 0) {
             return false;
@@ -595,106 +383,15 @@ class MasterShm {
         return lambda * meas_speed + (1.0f - lambda) * old_speed;
     }
 
-    void timer_callback() {
-        auto power_p    = readFramePayload(1, sizeof(Power));     // 12
-        auto steering_p = readFramePayload(2, sizeof(Steering));  // 12
-        auto rpm_f_p    = readFramePayload(3, sizeof(RPM));       // 12
-        auto rpm_b_p    = readFramePayload(4, sizeof(RPM));       // 12
-        auto motor_p    = readFramePayload(5, sizeof(Motor));     // 12
-
-        // Power: ts (4), current (4), voltage (4)
-        // Steering: ts (4), brake_pressure (4), turn_angle (4)
-        // RPM: ts (4), rpm_left (4), rpm_right (4)
-        // Motor: ts (4), rpm (4), duty_cycle (4)
-
-        SensorSnapshot snap{};
-
-        snap.global_ts = now_us();
-        snap.errcount  = errcount;
-
-        if (power_p.size() == sizeof(Power)) {
-            const uint8_t* p        = power_p.data();
-            snap.power_snap.ts      = u32_le_bytes(p + 0);
-            snap.power_snap.current = f32_le_bytes(p + 4) - 0.45f;  // temp bias needed
-            snap.power_snap.voltage = f32_le_bytes(p + 8);
-        } else {
-            // For debugging, we only use Power for now
-            errcount++;
-            std::fprintf(stderr, "Failed to read Power frame, errcount %d\n", errcount);
-
-            snap.power_snap.ts      = 0;
-            snap.power_snap.current = NANF;
-            snap.power_snap.voltage = NANF;
-        }
-
-        if (steering_p.size() == sizeof(Steering)) {
-            const uint8_t* p                  = steering_p.data();
-            snap.steering_snap.ts             = u32_le_bytes(p + 0);
-            snap.steering_snap.brake_pressure = f32_le_bytes(p + 4);
-            snap.steering_snap.turn_angle     = f32_le_bytes(p + 8);
-        } else {
-            errcount++;
-            std::fprintf(stderr, "Failed to read Steering frame, errcount %d\n", errcount);
-
-            snap.steering_snap.ts             = 0;
-            snap.steering_snap.brake_pressure = NANF;
-            snap.steering_snap.turn_angle     = NANF;
-        }
-
-        if (rpm_f_p.size() == sizeof(RPM)) {
-            const uint8_t* p              = rpm_f_p.data();
-            snap.rpm_snap_front.ts        = u32_le_bytes(p + 0);
-            snap.rpm_snap_front.rpm_left  = f32_le_bytes(p + 4);
-            snap.rpm_snap_front.rpm_right = f32_le_bytes(p + 8);
-        } else {
-            snap.rpm_snap_front.ts        = 0;
-            snap.rpm_snap_front.rpm_left  = NANF;
-            snap.rpm_snap_front.rpm_right = NANF;
-        }
-
-        if (rpm_b_p.size() == sizeof(RPM)) {
-            const uint8_t* p             = rpm_b_p.data();
-            snap.rpm_snap_back.ts        = u32_le_bytes(p + 0);
-            snap.rpm_snap_back.rpm_left  = f32_le_bytes(p + 4);
-            snap.rpm_snap_back.rpm_right = f32_le_bytes(p + 8);
-        } else {
-            errcount++;
-            std::fprintf(stderr, "Failed to read RPM frame, errcount %d\n", errcount);
-
-            snap.rpm_snap_back.ts        = 0;
-            snap.rpm_snap_back.rpm_left  = NANF;
-            snap.rpm_snap_back.rpm_right = NANF;
-        }
-
-        if (motor_p.size() == sizeof(Motor)) {
-            const uint8_t* p           = motor_p.data();
-            snap.motor_snap.ts         = u32_le_bytes(p + 0);
-            snap.motor_snap.rpm        = f32_le_bytes(p + 4);
-            snap.motor_snap.duty_cycle = f32_le_bytes(p + 8);
-        } else {
-            errcount++;
-            std::fprintf(stderr, "Failed to read Motor frame, errcount %d\n", errcount);
-
-            snap.motor_snap.ts         = 0;
-            snap.motor_snap.rpm        = NANF;
-            snap.motor_snap.duty_cycle = NANF;
-        }
-
-        float avg_rpm = (snap.rpm_snap_back.rpm_left + snap.rpm_snap_back.rpm_right) / 2.0;
-        speed         = filtered_speed(speed, avg_rpm);
-        snap.filtered_snap.speed = speed;
-
-        snap.gps_snap = read_gps_cached();  // Latest GPS snapshot from GPS thread
-
-        write_snapshot(snap);
-    }
 };
-
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 2 || (argc == 2 && std::strcmp(argv[1], "--help") == 0)) {
+        std::fprintf(stderr, "Usage: %s [CAN_INTERFACE] (default can0)\n", argv[0]);
+        return argc > 2 ? 1 : 0;
+    }
     std::signal(SIGINT, handle_sigint);
-
-    MasterShm node;
+    std::signal(SIGTERM, handle_sigint);
+    MasterShm node(argc == 2 ? argv[1] : "can0");
     if (!node.ok()) return 1;
-    node.spin(5000);  // 200 Hz
-    return 0;
+    node.spin();
 }
