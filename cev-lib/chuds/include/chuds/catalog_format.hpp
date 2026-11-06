@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cinttypes>
 #include <cstdio>
 #include <span>
 #include <utility>
@@ -20,20 +21,23 @@ inline int format_message(const Message& m, std::span<char> out) {
         return std::snprintf(out.data(), out.size(), "body state 0x%02x", b->bits);
     }
     if (const auto b = catalog_body<front_aux::Telemetry>(m)) {
-        return std::snprintf(out.data(), out.size(), "front_aux rpm %d/%d steering %d", b->rpm_left,
-                             b->rpm_right, b->steering);
+        return std::snprintf(out.data(), out.size(),
+                             "front_aux rpm %d/%d steering %d at %" PRIu32 " us", b->rpm_left,
+                             b->rpm_right, b->steering, b->ts);
     }
     if (const auto b = catalog_body<StatusBlink>(m)) {
         return std::snprintf(out.data(), out.size(), "status blink %d ms to 0x%02x",
                              b->half_period_ms, m.subaddress);
     }
     if (const auto b = catalog_body<back_aux::Telemetry>(m)) {
-        return std::snprintf(out.data(), out.size(), "back_aux rpm %d/%d brake %d", b->rpm_left,
-                             b->rpm_right, b->brake);
+        return std::snprintf(out.data(), out.size(),
+                             "back_aux rpm %d/%d brake %d at %" PRIu32 " us", b->rpm_left,
+                             b->rpm_right, b->brake, b->ts);
     }
     if (const auto b = catalog_body<joulemeter::Telemetry>(m)) {
-        return std::snprintf(out.data(), out.size(), "joulemeter %.2f V %.2f A %.1f W %.1f J",
-                             b->voltage, b->current, b->power, b->energy);
+        return std::snprintf(out.data(), out.size(),
+                             "joulemeter %.2f V %.2f A %.1f W %.1f J at %" PRIu32 " us", b->voltage,
+                             b->current, b->power, b->energy, b->ts);
     }
     // not in the catalog, or its body size does not match
     return std::snprintf(

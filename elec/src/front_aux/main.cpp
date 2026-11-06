@@ -127,9 +127,9 @@ int main() {
         }
 
         if (pub.due()) {
-            const cev::RpmCounts rpm = cev::rpm_take();
+            const cev::RpmSample rpm = cev::rpm_take();
             adc_select_input(kSteeringChannel);
-            bus.send(Telemetry{rpm.left, rpm.right, adc_read()});
+            bus.send(Telemetry{rpm.ts, rpm.left, rpm.right, adc_read()});
         }
     }
 }
