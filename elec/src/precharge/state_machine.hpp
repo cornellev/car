@@ -14,23 +14,23 @@ enum class State : std::uint8_t {
     Precharge,
     CloseMain,
     Run,
-    Estop,           // latched until power cycle
-    Fault,           // latched until power cycle
+    Estop,  // latched until power cycle
+    Fault,  // latched until power cycle
 };
 
 // The number is the LED blink count.
 enum class Fault : std::uint8_t {
     None,
-    WatchdogReset,   // 1  firmware hung or crashed last boot
-    Sensor,          // 2  bus above battery, or bus jumped faster than possible
-    BattUv,          // 3
-    BattOv,          // 4
-    SsrStuckOn,      // 5  bus rose at boot with the SSR off
-    NoRise,          // 6  bus not charging: shorted bus or open precharge path
-    Stall,           // 7  bus stopped rising: something draws current
-    Timeout,         // 8
-    MainMismatch,    // 9  main relay did not close
-    Dropout,         // 10 main relay opened while running
+    WatchdogReset,  // 1  firmware hung or crashed last boot
+    Sensor,         // 2  bus above battery, or bus jumped faster than possible
+    BattUv,         // 3
+    BattOv,         // 4
+    SsrStuckOn,     // 5  bus rose at boot with the SSR off
+    NoRise,         // 6  bus not charging: shorted bus or open precharge path
+    Stall,          // 7  bus stopped rising: something draws current
+    Timeout,        // 8
+    MainMismatch,   // 9  main relay did not close
+    Dropout,        // 10 main relay opened while running
 };
 
 enum class Main : std::uint8_t { Off, PullIn, Hold };
@@ -46,14 +46,14 @@ struct Inputs {
 };
 
 struct Outputs {
-    Main main = Main::Off;
-    bool ssr = false;
+    Main main        = Main::Off;
+    bool ssr         = false;
     bool arm_request = false;  // ask the relay layer to arm (it re-checks the e-stop pin)
 };
 
 // True once `cond` has held continuously for `ms`.
 struct Persist {
-    bool active = false;
+    bool active         = false;
     std::uint64_t since = 0;
     bool update(bool cond, std::uint64_t now, std::uint32_t ms);
 };
@@ -62,14 +62,14 @@ struct Controller {
     Controller(bool watchdog_reboot, bool dev_mode, std::uint64_t now_ms);
     Outputs step(const Inputs& in);
 
-    State state = State::Init;
-    State prev_state = State::Init;
-    bool changed = false;          // a transition happened on the last step
-    Fault fault = Fault::None;
-    float fault_value = 0.0f;      // the reading that tripped it
+    State state                = State::Init;
+    State prev_state           = State::Init;
+    bool changed               = false;  // a transition happened on the last step
+    Fault fault                = Fault::None;
+    float fault_value          = 0.0f;  // the reading that tripped it
     std::uint32_t precharge_ms = 0;
 
-private:
+   private:
     void go(State s, std::uint64_t now);
     Outputs trip(Fault f, float value, std::uint64_t now);
     Outputs begin(const Inputs& in);
@@ -79,10 +79,10 @@ private:
     bool start_seen_ = false;
     std::uint64_t entry_ms_;
     std::uint64_t last_ms_;
-    float leak_ref_bus_ = 0.0f;
-    float prev_bus_ = 0.0f;
+    float leak_ref_bus_   = 0.0f;
+    float prev_bus_       = 0.0f;
     std::uint64_t win_ms_ = 0;
-    float win_bus_ = 0.0f;
+    float win_bus_        = 0.0f;
     Persist released_, sensor_, uv_, ov_, dropout_;
 };
 
