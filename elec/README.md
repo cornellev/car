@@ -262,3 +262,9 @@ vim.lsp.enable('clangd')
 ### Other editors
 
 Pass `--query-driver=**/arm-none-eabi-*,**/clang++` to clangd.
+
+Front aux retries failed CAN initialization five seconds after each failed
+attempt, printing `can init failed` again on failure and `can init ok` on recovery.
+The retry timer does not pause the main loop between attempts. A controller that
+initialized but reports error-passive or bus-off is not an initialization failure
+and does not trigger these retries.

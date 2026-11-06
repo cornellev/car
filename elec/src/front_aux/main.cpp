@@ -83,6 +83,7 @@ int main() {
     cev::Interval pub{kPublishPeriodMs};
     bool led_on{};
     cev::Interval blink{kBlinkHalfPeriodMs};
+    cev::Interval can_retry{5000};
     cev::CanHealth can_health;
     cev::RxLog rx_log{kNodeId};
     absolute_time_t command_deadline = make_timeout_time_ms(kCommandTimeoutMs);
@@ -92,7 +93,13 @@ int main() {
 
     while (true) {
         watchdog_update();
-        can_health.check(bus);
+        if (!bus.ready() && can_retry.due()) {
+            std::printf(bus.retry_init() ? "can init ok\n" : "can init failed\n");
+            // Schedule from completion so a slow attempt cannot cause a retry burst.
+            can_retry.next = make_timeout_time_ms(can_retry.period_ms);
+            watchdog_update();
+        }
+        if (bus.ready()) can_health.check(bus);
         for (int i = 0; i < kMaxRxPerPass; ++i) {
             const auto rx = bus.recv();
             if (!rx) {
