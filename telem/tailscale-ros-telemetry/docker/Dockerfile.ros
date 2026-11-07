@@ -1,0 +1,25 @@
+FROM ros:humble-ros-base-jammy
+
+# install packages
+RUN apt-get update && apt-get install -y \
+    ca-certificates gnupg git build-essential unzip wget \
+    ros-humble-rosbag2-storage-mcap \
+    && rm -rf /var/lib/apt/lists/*
+
+# install pigpio from source
+RUN git clone https://github.com/joan2937/pigpio /pigpio
+WORKDIR /pigpio
+RUN make && make install
+
+# copy and build ros-telemetry (this repo)
+COPY src/ /ros-telemetry/src/
+WORKDIR /ros-telemetry
+RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
+
+COPY docker/entrypoint-ros.sh /entrypoint-ros.sh
+COPY docker/entrypoint-rosbag.sh /entrypoint-rosbag.sh
+COPY docker/entrypoint-discovery.sh /entrypoint-discovery.sh
+COPY docker/entrypoint-subscriber.sh /entrypoint-subscriber.sh
+RUN chmod +x /entrypoint-ros.sh /entrypoint-rosbag.sh /entrypoint-discovery.sh /entrypoint-subscriber.sh
+
+ENTRYPOINT ["/entrypoint-ros.sh"]
