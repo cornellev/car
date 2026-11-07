@@ -2,6 +2,7 @@
 
 #include <array>
 #include <string_view>
+#include <type_traits>
 
 #include "chuds/catalog.hpp"
 #include "chuds/catalog_format.hpp"
@@ -21,12 +22,13 @@ TEST_CASE("format_message prints a catalog body with its values") {
 }
 
 TEST_CASE("format_message prints joulemeter floats") {
-    const joulemeter::Telemetry t{47.91f, 3.2f, 153.3f, 812.4f};
+    const joulemeter::Telemetry t{4'294'967'000U, 47.91f, 3.2f, 153.3f, 812.4f};
     const auto m = make_message(MsgClass::Telemetry, joulemeter::kNodeId, MsgType::Update, t);
     REQUIRE(m.has_value());
     std::array<char, 96> line{};
     format_message(*m, line);
-    CHECK(std::string_view(line.data()) == "joulemeter 47.91 V 3.20 A 153.3 W 812.4 J");
+    CHECK(std::string_view(line.data()) ==
+          "joulemeter 47.91 V 3.20 A 153.3 W 812.4 J at 4294967000 us");
 }
 
 TEST_CASE("format_message prints a status blink command with its target node") {
@@ -85,17 +87,17 @@ TEST_CASE("format_message prints a body state id with a non-Update type as a pla
 
 TEST_CASE("format_message prints both aux boards' telemetry") {
     const auto front = make_message(MsgClass::Telemetry, front_aux::kNodeId, MsgType::Update,
-                                    front_aux::Telemetry{12, 13, 2048});
+                                    front_aux::Telemetry{4'294'967'000U, 12, 13, 2048});
     REQUIRE(front.has_value());
     std::array<char, 96> line{};
     format_message(*front, line);
-    CHECK(std::string_view(line.data()) == "front_aux rpm 12/13 steering 2048");
+    CHECK(std::string_view(line.data()) == "front_aux rpm 12/13 steering 2048 at 4294967000 us");
 
     const auto back = make_message(MsgClass::Telemetry, back_aux::kNodeId, MsgType::Update,
-                                   back_aux::Telemetry{7, 8, 900});
+                                   back_aux::Telemetry{4'294'967'000U, 7, 8, 900});
     REQUIRE(back.has_value());
     format_message(*back, line);
-    CHECK(std::string_view(line.data()) == "back_aux rpm 7/8 brake 900");
+    CHECK(std::string_view(line.data()) == "back_aux rpm 7/8 brake 900 at 4294967000 us");
 }
 
 TEST_CASE("format_message does not print a telemetry frame on 0x08 as a body state") {
@@ -104,4 +106,22 @@ TEST_CASE("format_message does not print a telemetry frame on 0x08 as a body sta
     std::array<char, 96> line{};
     format_message(*m, line);
     CHECK(std::string_view(line.data()) == "class 2 subaddress 0x08 type 0, 1 body bytes");
+}
+
+TEST_CASE("telemetry timestamps survive CAN-FD encode and decode") {
+    const auto check = [](const auto& telemetry) {
+        using T            = std::decay_t<decltype(telemetry)>;
+        const auto message = make_message(T::kClass, T::kSubaddress, MsgType::Update, telemetry);
+        REQUIRE(message.has_value());
+        const auto frame = encode(*message);
+        REQUIRE(frame.has_value());
+        const auto decoded = decode(*frame);
+        REQUIRE(decoded.has_value());
+        const auto body = catalog_body<T>(*decoded);
+        REQUIRE(body.has_value());
+        CHECK(body->ts == telemetry.ts);
+    };
+    check(front_aux::Telemetry{4'294'967'000U, 60, 120, 2048});
+    check(back_aux::Telemetry{4'294'967'000U, 60, 120, 900});
+    check(joulemeter::Telemetry{4'294'967'000U, 48.0f, 3.0f, 144.0f, 812.0f});
 }

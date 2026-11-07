@@ -111,7 +111,8 @@ int main() {
         }
 
         if (report.due()) {
-            const Telemetry t{static_cast<float>(v_sum / period_s),
+            const Telemetry t{static_cast<std::uint32_t>(to_us_since_boot(now)),
+                              static_cast<float>(v_sum / period_s),
                               static_cast<float>(i_sum / period_s),
                               static_cast<float>((joules - report_joules) / period_s),
                               static_cast<float>(joules)};
