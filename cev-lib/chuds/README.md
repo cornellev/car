@@ -197,6 +197,15 @@ body outputs as one `BodyState` bitmask on `0x108`, and each node drives only th
 The VCU must resend it on change and well within every second, since boards fall back to safe
 states after 1 s without one.
 
+All telemetry bodies start with a `uint32_t ts`: microseconds since the sending
+node booted, from its local monotonic clock. Clocks are not synchronized across nodes. The timestamp wraps every 2^32 microseconds
+(about 71.6 minutes); compute intervals with unsigned 32-bit subtraction.
+Aux wheel speeds are whole RPM, rounded to nearest (saturated at 65535), using 32 rising
+pulses per revolution and the actual elapsed sample window. Aux bodies include a zeroed
+`uint16_t reserved` after the ADC field to keep the wire representation free of padding.
+Telemetry bodies are 12 bytes for each aux node and 20 bytes for the joulemeter.
+This changes the wire layout; senders and consumers must use the updated catalog together.
+
 | Node       | Subaddress | Telemetry (`0x2NN`)             | Drives from `BodyState`    |
 | ---------- | ---------- | ------------------------------- | -------------------------- |
 | front_aux  | `0x10`     | rpm_left, rpm_right, steering   | turn L/R, headlights, horn |

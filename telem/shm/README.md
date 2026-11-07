@@ -1,29 +1,151 @@
-# shm
+# Sensor shared memory
 
-SPI sensor reader to shared memory, with a Python reader.
+The Linux writer receives CHUDS CAN-FD telemetry with the repository's
+`chuds::Bus<chuds::SocketCanTransport>` and `catalog_body<T>`. It publishes cached
+snapshots every 5 ms (200 Hz) with the existing seqlock. `/sensor_shm`, its packed
+100-byte block, and `read_shm.py` are unchanged. One writer must own this block.
+Each node changes only its own fields; missing nodes retain their latest values.
+There is no stale-data timeout in this legacy layout. Before first reception,
+measurements are NaN and node timestamps are zero. Motor RPM and duty cycle remain
+NaN with timestamp zero because the catalog has no motor message.
 
-`write_shm.cpp` is a Pi-side daemon: it polls the RP2040 sensor boards over SPI
-(HDLC-framed, CRC-checked), reads GPS over UART, and publishes the latest
-snapshot into POSIX shared memory `/sensor_shm` using a seqlock so readers never
-block. `read_shm.py` reads that block lock-free.
+## Build and run (Linux / Pi)
 
-The two are coupled only by the shm name (`/sensor_shm`) and the snapshot struct
-layout - keep them in sync.
+Use a C++23 toolchain with `std::expected` support (for example GCC 13 or newer),
+CMake 3.21+, and Python 3. No pigpio daemon or library is needed.
 
-## Build and run (Pi only)
-
-Needs `pigpiod` running and the pigpio dev headers. Does not build on macOS
-(depends on `pigpiod_if2`, `linux/spi/spidev.h`).
-
+```sh
+cmake -S telem/shm -B build/telem-shm -DCMAKE_CXX_COMPILER=g++
+cmake --build build/telem-shm -j
+./build/telem-shm/write_shm           # can0
+./build/telem-shm/write_shm vcan0     # positional interface selection
+python3 telem/shm/read_shm.py formatted
 ```
-cmake -S telem/shm -B telem/shm/build -G Ninja
-cmake --build telem/shm/build
-sudo pigpiod              # if not already running
-./telem/shm/build/write_shm
+
+See [CHUDS hardware, wiring, kernel driver and interface setup](../../cev-lib/chuds/README.md).
+The Pi CAN controller still uses SPI through the Linux kernel; the writer no
+longer polls sensor boards or controls chip selects. Use the CHUDS setup's
+500 kbit/s nominal, 2 Mbit/s data and 80% sample points on both phases.
+Opening an unavailable or non-FD interface fails startup.
+
+UART GPS remains on `/dev/serial0`; `SHM_GPS_DEVICE` overrides the device for a
+bench setup. Existing GNRMC/GPRMC parsing is preserved: latitude/longitude in
+degrees, heading in degrees and speed in m/s. Configure UART baud rate and raw
+mode externally as before. Missing GPS leaves NaNs and timestamp zero. The UART
+reader now accumulates nonblocking reads and can shut down without a GPS fix.
+
+## Conversions and configuration
+
+| Input | Snapshot units / conversion |
+| --- | --- |
+| front_aux wheel RPM | Firmware RPM copied directly to snapshot floats |
+| back_aux wheel RPM | Same; rear average drives the existing speed filter |
+| front_aux steering ADC | steering angle in degrees = ADC × scale + offset |
+| back_aux brake ADC | brake pressure in bar = ADC × scale + offset |
+| joulemeter current / voltage | A / V, already converted by firmware; current + optional offset |
+| filtered speed | m/s; RPM × pi × 0.58166 m / 60, existing alpha 0.05 filter at 200 Hz |
+
+Wheel firmware converts 32 rising pulses per revolution using the actual elapsed
+sample window. The writer does not rescale RPM; `SHM_EDGES_PER_REV` and
+`SHM_WINDOW_MS` are no longer used.
+
+Configuration uses environment variables:
+
+- `SHM_STEERING_SCALE`, `SHM_STEERING_OFFSET`: degrees/count and degrees.
+- `SHM_BRAKE_SCALE`, `SHM_BRAKE_OFFSET`: bar/count and bar.
+- Both ADC coefficients must be provided for each measurement. Defaults are NaN;
+  ADC outside 0–4095 also produces NaN. **Degrees and bar are the proposed output
+  convention, pending confirmation of calibration and consumer expectations.**
+  The repository documents a Piher PST-360 and voltage dividers but does not
+  supply installed sensor calibration. Do not use test coefficients on the car.
+- `SHM_CURRENT_OFFSET_A` defaults to **0**. The old SPI `-0.45 A` correction is
+  removed by default, pending a joulemeter bench comparison with elec. Set an
+  explicit correction only after testing; no such validation has been performed.
+
+Numeric overrides must be finite.
+`errcount` now counts unsuccessful CAN receives other than an empty queue,
+including rejected frames and transport faults, rather than failed SPI polls.
+It does not indicate missing nodes or guarantee detection of lost frames.
+
+## Timestamps and validity limitations
+
+`global_ts` is local monotonic publication time in microseconds (64 bits).
+CAN node timestamps are copied from each telemetry body's `uint32_t ts`: local
+microseconds since the sending board booted, wrapping approximately every 71.6
+minutes. They are sensor timestamps, not Pi receive times, and are not synchronized
+with other boards or `global_ts`. Compare intervals within one board modulo 2^32.
+A wrapped value can equal zero, so zero alone is not a permanent validity guarantee.
+
+Front RPM and `steering.ts` advance together on front_aux reception.
+**`steering.ts` timestamps steering angle only**, not brake pressure.
+Brake pressure's sample time is `rpm_back.ts`, which advances with back_aux.
+Power has the joulemeter sample timestamp. GPS time is local completed RMC
+parse time. Cached values and their timestamps survive other nodes' updates.
+The legacy layout cannot represent separate validity flags or detailed freshness.
+
+## vcan integration test
+
+Run on Linux with no other `/sensor_shm` writer or consumers relying on live data.
+The test overwrites the production shared-memory block and leaves it allocated.
+
+```sh
+sudo modprobe vcan
+sudo ip link add dev vcan0 type vcan    # once, if absent
+sudo ip link set vcan0 up
+python3 telem/shm/test_vcan.py ./build/telem-shm/write_shm
 ```
 
-Then in another shell:
+The test injects CHUDS CAN-FD frames and reads through the unchanged Python reader.
+It checks the 100-byte layout, RPM pass-through, ADC/current conversions, speed,
+motor NaNs, sensor timestamp preservation and rollover, node timestamp independence,
+cached values, fragmented UART GPS ingestion through a pseudo-terminal, and clean
+shutdown. ADC coefficients
+in this test are synthetic, not calibration.
 
-```
-python3 telem/shm/read_shm.py
+## Hardware verification and next PR
+
+**Pi verification is pending.** On the Pi, follow CHUDS hardware setup, build with
+the commands above, run the vcan test, then run on can0 with all three boards.
+Compare counted wheel revolutions against RPM; measure steering center/endpoints
+and brake reference pressures to establish coefficients and units. Compare
+joulemeter readings at zero and known loads against a reference meter to settle
+whether any current correction is needed. Disconnect one node and confirm other
+nodes continue updating while its cached fields remain fixed. Check UART GPS
+fixes and SIGTERM shutdown. Record Pi model, OS/compiler, firmware revisions,
+coefficients, reference readings and test results before marking this verified.
+
+**Coordination is pending; no timeline or message definitions have been agreed.**
+During the first PR, contact elec / CHUDS maintainers to confirm ADC calibration/units, current-offset bench
+results, and whether motor RPM/duty cycle remain wanted vehicle telemetry.
+
+Prioritize Vehicle Controller support immediately after this migration. Aleena
+Xiao owns the project integrating ZED-F9P GPS, ASM330 IMU and MMC5983MA
+magnetometer. Coordinate with Aleena and CHUDS maintainers during this PR to
+record the implementation timeline, CAN catalog definitions and earliest bench
+integration date. Confirm axes/frame conventions, units/scales, rates, message
+fragmentation, sensor vs receive timestamps, clock synchronization, GPS fix
+quality and per-sensor validity/staleness semantics. All three sensors must be
+exposed, particularly IMU and magnetometer measurements for autonomy.
+
+That PR must version/extend the shared-memory layout and update all readers for
+new measurements, timestamps and validity, with tests for partial updates,
+dropouts and compatibility. Keep UART GPS until the new GPS interface has been
+bench validated; then migrate it with an explicit source/validity policy.
+Body commands and STOP handling remain outside this writer's scope.
+
+## Receive diagnostics
+
+The writer logs startup, missing calibration, and each accepted telemetry message
+with its node, decoded values and board timestamp to stderr. Once per second it
+prints cumulative accepted-message counts for each node, ignored messages and
+receive errors. Zero node counts indicate no matching telemetry received since
+startup. The first five ignored messages include class, node, type and body size
+so catalog mismatches are visible; the first five receive errors include the
+transport error number. Later errors remain visible in the totals.
+
+Set `SHM_LOG_RX=0` to disable per-message logs while keeping startup, diagnostics
+and the one-second totals:
+
+```sh
+SHM_LOG_RX=0 ./build/telem-shm/write_shm can0
 ```

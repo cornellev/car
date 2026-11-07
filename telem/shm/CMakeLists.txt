@@ -1,10 +1,12 @@
-cmake_minimum_required(VERSION 3.13)
-
+cmake_minimum_required(VERSION 3.21)
 project(telem_shm CXX)
-
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# pi only: pigpiod_if2 for the pigpio daemon, rt for shm_open, pthread for std::thread
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    message(FATAL_ERROR "The shared-memory writer requires Linux SocketCAN")
+endif()
+if(NOT TARGET chuds_socketcan)
+    add_subdirectory(../../cev-lib/chuds chuds)
+endif()
+find_package(Threads REQUIRED)
 add_executable(write_shm write_shm.cpp)
-target_link_libraries(write_shm pigpiod_if2 rt pthread)
+target_compile_features(write_shm PRIVATE cxx_std_23)
+target_link_libraries(write_shm PRIVATE chuds_socketcan rt Threads::Threads)

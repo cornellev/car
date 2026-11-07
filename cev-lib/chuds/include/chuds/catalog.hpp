@@ -42,12 +42,14 @@ struct Telemetry {
     static constexpr MsgClass kClass          = MsgClass::Telemetry;
     static constexpr std::uint8_t kSubaddress = kNodeId;
 
-    std::uint16_t rpm_left{};   // wheel edges in the last window
-    std::uint16_t rpm_right{};  // wheel edges in the last window
+    std::uint32_t ts{};         // local microseconds since boot, wraps at 2^32; not synchronized
+    std::uint16_t rpm_left{};   // whole wheel RPM, rounded to nearest
+    std::uint16_t rpm_right{};  // whole wheel RPM, rounded to nearest
     std::uint16_t steering{};   // raw adc, 0-4095
+    std::uint16_t reserved{};   // sent as zero; explicit alignment bytes
     static constexpr bool is_chuds_wire_body = true;
 };
-static_assert(sizeof(Telemetry) == 6);
+static_assert(sizeof(Telemetry) == 12);
 
 }  // namespace chuds::front_aux
 
@@ -61,12 +63,14 @@ struct Telemetry {
     static constexpr MsgClass kClass          = MsgClass::Telemetry;
     static constexpr std::uint8_t kSubaddress = kNodeId;
 
-    std::uint16_t rpm_left{};   // wheel edges in the last window
-    std::uint16_t rpm_right{};  // wheel edges in the last window
+    std::uint32_t ts{};         // local microseconds since boot, wraps at 2^32; not synchronized
+    std::uint16_t rpm_left{};   // whole wheel RPM, rounded to nearest
+    std::uint16_t rpm_right{};  // whole wheel RPM, rounded to nearest
     std::uint16_t brake{};      // raw adc, 0-4095
+    std::uint16_t reserved{};   // sent as zero; explicit alignment bytes
     static constexpr bool is_chuds_wire_body = true;
 };
-static_assert(sizeof(Telemetry) == 6);
+static_assert(sizeof(Telemetry) == 12);
 
 }  // namespace chuds::back_aux
 
@@ -80,13 +84,14 @@ struct Telemetry {
     static constexpr MsgClass kClass          = MsgClass::Telemetry;
     static constexpr std::uint8_t kSubaddress = kNodeId;
 
-    float voltage{};  // bus volts, averaged over the report period
-    float current{};  // bus amps, averaged over the report period
-    float power{};    // watts, averaged over the report period
-    float energy{};   // joules since boot
+    std::uint32_t ts{};  // local microseconds since boot, wraps at 2^32; not synchronized
+    float voltage{};     // bus volts, averaged over the report period
+    float current{};     // bus amps, averaged over the report period
+    float power{};       // watts, averaged over the report period
+    float energy{};      // joules since boot
     static constexpr bool is_chuds_wire_body = true;
 };
-static_assert(sizeof(Telemetry) == 16);
+static_assert(sizeof(Telemetry) == 20);
 
 }  // namespace chuds::joulemeter
 
