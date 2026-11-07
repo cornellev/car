@@ -1,0 +1,146 @@
+services:
+  tailscale:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tailscale
+    container_name: ts-authkey-container
+    hostname: ros-tailscale-service
+    environment:
+      - TS_CLIENT_ID=${TS_CLIENT_ID:-}
+      - TS_CLIENT_SECRET=${TS_CLIENT_SECRET:-}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_AUTH_ONCE=true
+      - TS_EXTRA_ARGS=--advertise-tags=tag:ros-device --ssh=true
+      - TS_ENABLE_HEALTH_CHECK=true
+      - TS_LOCAL_ADDR_PORT=127.0.0.1:9002
+    volumes:
+      - ts-authkey-container:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9002/healthz"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    restart: unless-stopped
+
+  zenoh-router:
+    image: eclipse/zenoh:1.9.0
+    command: ["--config", "/config/zenoh-router.json5"]
+    network_mode: service:tailscale
+    volumes:
+      - ./config/zenoh-router.json5:/config/zenoh-router.json5:ro
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Legacy ROS recording services; they do not consume the Zenoh stream yet.
+  discovery-server:
+    profiles: [bag]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros
+    entrypoint: ["/entrypoint-discovery.sh"]
+    container_name: ros-discovery-server
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      # healthcheck: checks /proc/net/udp for port 11811 (0x2E23) being bound
+      test: ["CMD", "bash", "-c", "grep -q ':2E23 ' /proc/net/udp"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  rosbag-api:
+    profiles: [bag]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    container_name: rosbag-api
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    environment:
+      - API_PORT=${ROSBAG_API_PORT:-8080}
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-14}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+  rosbag:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros
+    container_name: rosbag
+    profiles:
+      - bag
+    entrypoint: ["/entrypoint-rosbag.sh"]
+    depends_on:
+      ros:
+        condition: service_started
+      discovery-server:
+        condition: service_healthy
+    volumes:
+      - .:/workspace
+      - ./bags:/workspace/bags
+      - /dev/shm:/dev/shm # retained for legacy DDS recordings
+    network_mode: service:tailscale
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-14}
+      - ROS_DISCOVERY_SERVER=127.0.0.1:11811
+    restart: unless-stopped
+
+  ros:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.zenoh
+      additional_contexts:
+        shm: ../shm
+    restart: unless-stopped
+    network_mode: service:tailscale
+    depends_on:
+      tailscale:
+        condition: service_healthy
+      zenoh-router:
+        condition: service_started
+    environment:
+      - ZENOH_CONNECT=${ZENOH_CONNECT:-tcp/127.0.0.1:7447}
+    volumes:
+      - .:/workspace
+      - /dev/shm:/dev/shm # bind host POSIX shm into the container
+    working_dir: /workspace
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "20"
+
+  subscriber:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.zenoh
+      additional_contexts:
+        shm: ../shm
+    entrypoint: ["/entrypoint-subscriber.sh"]
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    network_mode: service:tailscale
+    environment:
+      - ZENOH_CONNECT=${ZENOH_CONNECT:-tcp/127.0.0.1:7447}
+    working_dir: /workspace
+    restart: unless-stopped
+
+volumes:
+  ts-authkey-container:
+    driver: local

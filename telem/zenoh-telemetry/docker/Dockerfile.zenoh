@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1
+WORKDIR /workspace
+
+COPY src/py_pubsub /opt/py_pubsub
+RUN pip install --no-cache-dir /opt/py_pubsub
+
+# Shared-memory reader from telem/shm, supplied by the "shm" additional build
+# context in docker-compose.yml. Imported as the top-level module `read_shm`.
+COPY --from=shm read_shm.py /opt/shm/read_shm.py
+ENV PYTHONPATH=/opt/shm
+
+COPY docker/entrypoint-ros.sh /entrypoint-ros.sh
+COPY docker/entrypoint-subscriber.sh /entrypoint-subscriber.sh
+RUN chmod +x /entrypoint-ros.sh /entrypoint-subscriber.sh
+
+ENTRYPOINT ["/entrypoint-ros.sh"]

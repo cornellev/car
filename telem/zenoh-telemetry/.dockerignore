@@ -1,0 +1,21 @@
+# ignore everything
+# this probably is a bad practice but it works so...
+*
+
+# only include what's needed for the build
+!src/
+!src/**
+!docker/
+!docker/**
+!api/
+!api/**
+
+# Exclude local build artifacts and submodule Git metadata.
+**/.git
+**/__pycache__
+**/*.egg-info
+**/build
+**/dist
+**/.pytest_cache
+**/.ruff_cache
+

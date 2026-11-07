@@ -1,0 +1,8 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+# read_shm.py lives in telem/shm and is imported as a top-level module.
+pythonpath = ["../../../shm"]

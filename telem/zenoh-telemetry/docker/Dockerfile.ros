@@ -1,0 +1,9 @@
+FROM ros:humble-ros-base-jammy
+
+# Legacy bag/discovery tooling only. Live telemetry uses Dockerfile.zenoh.
+WORKDIR /ros-telemetry
+COPY docker/entrypoint-rosbag.sh /entrypoint-rosbag.sh
+COPY docker/entrypoint-discovery.sh /entrypoint-discovery.sh
+RUN chmod +x /entrypoint-rosbag.sh /entrypoint-discovery.sh
+
+ENTRYPOINT ["/entrypoint-rosbag.sh"]
