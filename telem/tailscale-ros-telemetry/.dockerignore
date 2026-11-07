@@ -1,0 +1,9 @@
+# ignore everything
+# this probably is a bad practice but it works so...
+*
+
+# only include what's needed for the build
+!src/
+!docker/
+!api/
+

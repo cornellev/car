@@ -1,0 +1,20 @@
+Metadata-Version: 2.4
+Name: py_pubsub
+Version: 0.1.0
+Summary: Shared-memory telemetry published as JSON over Zenoh
+Maintainer: erics118
+Maintainer-email: ericshen118@gmail.com
+License: Apache-2.0
+Requires-Python: >=3.10
+License-File: LICENSE
+Requires-Dist: eclipse-zenoh==1.9.0
+Provides-Extra: test
+Requires-Dist: pytest; extra == "test"
+Dynamic: license
+Dynamic: license-file
+Dynamic: maintainer
+Dynamic: maintainer-email
+Dynamic: provides-extra
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
