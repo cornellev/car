@@ -10,8 +10,8 @@ The Pico SDK is vendored at the repo root in `vendor/pico-sdk/` as a git submodu
 ## Setup
 
 The setup scripts install the general build tools, like CMake, Ninja, and Just. They do not
-install the arm compiler or picotool. The first `just build` downloads the pinned versions (arm
-compiler 15.3.rel1 and picotool 2.3.0) into `elec/.tools`. That download is 150 to 300 MB, takes
+install the arm compiler or picotool. The first `just build` downloads the versions pinned in
+`elec/cmake/pinned_tools.cmake` into `elec/.tools`. That download is 150 to 300 MB, takes
 about 1 GB of disk, and needs internet once. Later builds reuse it. The build always
 uses these copies, so another `arm-none-eabi-gcc` on your computer can't break it.
 
@@ -48,7 +48,7 @@ Intel Macs aren't supported, because Arm does not publish an Intel Mac build of 
 
 ### Linux
 
-On Debian 12 or newer, Ubuntu 22.04 or newer, or Arch, on an x86_64 or ARM64 computer:
+On Debian 12 or newer, Ubuntu 24.04 or newer, or Arch, on an x86_64 or ARM64 computer:
 
 - cd to the `elec/` folder:
   ```sh
@@ -61,14 +61,15 @@ On Debian 12 or newer, Ubuntu 22.04 or newer, or Arch, on an x86_64 or ARM64 com
   It installs CMake, Ninja, Just, Python, and g++ with `apt` or `pacman`, and fetches the pico-sdk
   submodules. It also adds a udev rule so `just flash` works without root.
 
-On other distros, install CMake 3.21 or newer, Ninja, Just 1.52.0 or newer, Python 3, and libusb
-1.0 with your package manager.
+On other distros, install CMake 3.21 or newer, Ninja, Just 1.33.0 or newer, Python 3, g++, and
+libusb 1.0 with your package manager.
 
 ### Nix
 
 Use the provided flake. `nix develop` (or `direnv allow`) sets everything up. It sets
 `ELEC_SYSTEM_TOOLS`, so the build uses the flake's arm compiler and picotool instead of downloading
-its own.
+its own. The first configure reads it, and the build folder keeps that choice, so later builds from
+a shell or editor outside nix still use the flake's tools.
 
 ## Building
 
@@ -86,12 +87,12 @@ just doctor                        # check if tools are installed and working
 The project name is the folder name under `src/`. After a build, the file to flash onto the board is located at:
 
 ```
-elec/build/src/<project>/<project>.uf2
+build/firmware/elec/src/<project>/<project>.uf2
 ```
 
-If a build fails right after installing or switching tools (for example it uses
-the wrong compiler), run `just clean` and build again. The old `build/` folder
-caches the previous compiler, so a stale cache can break the next build.
+The `build/` folder is at the repo root. If a build fails right after installing or switching
+tools (for example it uses the wrong compiler), run `just clean` and build again. The old
+`build/firmware/` folder caches the previous compiler, so a stale cache can break the next build.
 
 ## Flashing (putting firmware on a board)
 
@@ -224,15 +225,19 @@ target_sources(steering PRIVATE pid.cpp encoder.cpp)
 ### VS Code
 
 We use the clangd extension instead of Microsoft's C/C++ IntelliSense because it integrates better
-with other platforms' tools. For setup:
+with other platforms' tools, and the CMake Tools extension to build, flash, and test from VS Code.
+For setup:
 
-- Build once first, because clangd reads `build/compile_commands.json`. For the chuds library's own
-  tests and examples, also run `just cev-lib chuds build` from the repo root (macOS and Linux
-  only, since it needs a C++ compiler for your computer)
-- chuds' SocketCAN code shows errors on macOS and Windows, because it uses Linux-only headers.
+- Build once first, because clangd reads `build/firmware/compile_commands.json`. For the chuds
+  library's own tests and examples, also run `just cev-lib chuds build` (macOS and Linux only,
+  since it needs a C++ compiler for your computer)
+- In the CMake side panel, under Project Status, pick the `firmware` or `host` preset. They are the
+  same presets `just` uses, and each board has a `flash_<board>` target
+- chuds' tests, examples, and tools show errors on Windows, which has no host build. Its SocketCAN
+  code shows errors on macOS and Windows, because it uses Linux-only headers.
   `telem/shm` shows errors anywhere but the Pi, because it needs the Pi's pigpio library
 - Open the repo root (`urban-concept/`) in VS Code, not `elec/`
-- Install the recommended clangd extension when VS Code asks
+- Install the recommended clangd and CMake Tools extensions when VS Code asks
 - If VS Code asks whether you trust the folder, click Trust
 - If it says clangd was not found on your PATH, click Install
 - Use clangd 19 or newer. Older ones show false errors about `std::expected`, and Ubuntu's `clangd`

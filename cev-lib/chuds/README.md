@@ -143,6 +143,8 @@ Things the code doesn't say:
 
 ## Files
 
+The headers are in `include/chuds/`.
+
 | File                      | What it holds                                                 |
 | ------------------------- | ------------------------------------------------------------- |
 | `chuds.hpp`               | includes everything below except the two transports           |
@@ -177,12 +179,13 @@ just clean
 The SocketCAN tests skip when `vcan0` is missing. Set `CHUDS_REQUIRE_CAN=1` to make that a
 failure instead, as CI does.
 
-The demo needs Linux and a virtual CAN interface:
+The build goes to `build/host/` at the repo root. The demo needs Linux and a virtual CAN interface.
+From the repo root:
 
 ```sh
-just vcan-up
-./build/examples/chuds_demo recv vcan0     # one terminal
-./build/examples/chuds_demo send vcan0     # another
+just cev-lib chuds vcan-up
+./build/host/cev-lib/chuds/examples/chuds_demo recv vcan0     # one terminal
+./build/host/cev-lib/chuds/examples/chuds_demo send vcan0     # another
 ```
 
 ## Nodes
@@ -211,14 +214,14 @@ one that names another node, ignores 0, and returns to the firmware default peri
 boards running `elec/src/devboard` take it too, all with node id `0x40`, so one command reaches
 every one of them.
 
-For bench testing on Linux, `chudsctl` (`build/tools/chudsctl`) sends and prints messages by name.
-The interface defaults to `can0`, and `-i` picks another:
+For bench testing on Linux, `chudsctl` (`build/host/cev-lib/chuds/tools/chudsctl` from the repo
+root) sends and prints messages by name. The interface defaults to `can0`, and `-i` picks another:
 
 ```sh
-./build/tools/chudsctl dump                   # print every message, decoded
-./build/tools/chudsctl body headlights left   # hold a BodyState until ctrl-c
-./build/tools/chudsctl blink all 100          # every node's status LED half-period, in ms
-./build/tools/chudsctl stop                   # STOP, latches until boards reset
+./build/host/cev-lib/chuds/tools/chudsctl dump                   # print every message, decoded
+./build/host/cev-lib/chuds/tools/chudsctl body headlights left   # hold a BodyState until ctrl-c
+./build/host/cev-lib/chuds/tools/chudsctl blink all 100          # every node's status LED half-period, in ms
+./build/host/cev-lib/chuds/tools/chudsctl stop                   # STOP, latches until boards reset
 ```
 
 `body` takes any of `headlights left right hazards horn wiper`. `blink` takes `front_aux`,
