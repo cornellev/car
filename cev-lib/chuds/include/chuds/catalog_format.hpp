@@ -13,8 +13,8 @@ namespace chuds {
 // returns the length snprintf would have written
 inline int format_message(const Message& m, std::span<char> out) {
     if (const auto b = read_stop(m)) {
-        return std::snprintf(out.data(), out.size(), "stop severity %d from 0x%02x", b->severity,
-                             b->sender);
+        return std::snprintf(out.data(), out.size(), "stop severity %d from 0x%02x reason %d",
+                             b->severity, b->sender, std::to_underlying(b->reason));
     }
     if (const auto b = catalog_body<BodyState>(m)) {
         return std::snprintf(out.data(), out.size(), "body state 0x%02x", b->bits);
@@ -25,7 +25,7 @@ inline int format_message(const Message& m, std::span<char> out) {
     }
     if (const auto b = catalog_body<StatusBlink>(m)) {
         return std::snprintf(out.data(), out.size(), "status blink %d ms to 0x%02x",
-                             b->half_period_ms, m.subaddress);
+                             b->half_period_ms, b->node);
     }
     if (const auto b = catalog_body<back_aux::Telemetry>(m)) {
         return std::snprintf(out.data(), out.size(), "back_aux rpm %d/%d brake %d", b->rpm_left,
@@ -35,10 +35,9 @@ inline int format_message(const Message& m, std::span<char> out) {
         return std::snprintf(out.data(), out.size(), "joulemeter %.2f V %.2f A %.1f W %.1f J",
                              b->voltage, b->current, b->power, b->energy);
     }
-    // not in the catalog, or its body size does not match
-    return std::snprintf(
-        out.data(), out.size(), "class %d subaddress 0x%02x type %d, %d body bytes",
-        std::to_underlying(m.cls), m.subaddress, std::to_underlying(m.type), m.body_len);
+    // not in the catalog, or its frame length does not match
+    return std::snprintf(out.data(), out.size(), "class %d subaddress 0x%02x, %d body bytes",
+                         std::to_underlying(m.cls), m.subaddress, m.body_len);
 }
 
 // print one line for m to stdout

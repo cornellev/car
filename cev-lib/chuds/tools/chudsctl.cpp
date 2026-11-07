@@ -167,7 +167,7 @@ int run_blink(Bus& bus, std::string_view node_name, std::string_view arg) {
     }
     bool ok = true;
     for (const NamedValue& node : nodes) {
-        const auto st = bus.send(node.value, chuds::StatusBlink{ms});
+        const auto st = bus.send(chuds::StatusBlink{.node = node.value, .half_period_ms = ms});
         report("status blink", st);
         ok = ok && st;
     }
@@ -180,7 +180,7 @@ int run_stop(Bus& bus, std::string_view arg) {
         std::fprintf(stderr, "stop severity must be 0-255\n");
         return 2;
     }
-    const auto stop = chuds::make_stop(severity, kSender, "chudsctl");
+    const auto stop = chuds::make_stop(severity, kSender, chuds::StopReason::Operator);
     auto st         = bus.send(stop);
     // a full tx queue drains within milliseconds, so retry for up to a second
     for (int tries = 0; !st && st.error() == chuds::TxError::QueueFull && tries < 100; ++tries) {

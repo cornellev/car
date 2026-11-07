@@ -40,30 +40,14 @@ class Bus {
         return t_.send(*f);
     }
 
-    // build a message from a struct body and send it
+    // build a message from a struct body and send it on the id the struct owns
     template <class Body>
-    TxResult send(MsgClass cls, std::uint8_t subaddress, MsgType type, const Body& body) {
-        const auto m = make_message(cls, subaddress, type, body);
+    TxResult send(const Body& body) {
+        const auto m = make_message(body);
         if (!m) {
             return std::unexpected(TxError::Error);
         }
         return send(*m);
-    }
-
-    // send a catalog body to its one address as an Update
-    template <SingleAddressBody Body>
-    TxResult send(const Body& body) {
-        return send(Body::kClass, Body::kSubaddress, MsgType::Update, body);
-    }
-
-    // send a catalog body to one of its addresses as an Update
-    // Error if subaddress is not one of them
-    template <MultiAddressBody Body>
-    TxResult send(std::uint8_t subaddress, const Body& body) {
-        if (!is_address_of<Body>(subaddress)) {
-            return std::unexpected(TxError::Error);
-        }
-        return send(Body::kClass, subaddress, MsgType::Update, body);
     }
 
     // the next message, or why there is none

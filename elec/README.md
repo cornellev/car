@@ -194,7 +194,7 @@ cat /dev/ttyACM0                         # one terminal: frames the board hears
 candump can0                             # another: frames the board sends
 printf '123##1DEADBEEF\n' > /dev/ttyACM0 # board to can0
 cansend can0 124##1CAFE                  # can0 to board
-cansend can0 140##100026400              # StatusBlink: every dev board's LEDs at 100 ms
+cansend can0 109##140006400              # StatusBlink: every dev board's LEDs at 100 ms
 ```
 
 A Pico drops its USB output while no program has the port open, so start `cat` before sending.

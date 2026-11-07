@@ -8,10 +8,11 @@ namespace chuds {
 
 // top 3 bits of the id select the message class, low 8 bits are the subaddress
 // classes are dense and ordered by priority, so the lower id wins arbitration
-enum class MsgClass : std::uint8_t {
+enum class Band : std::uint8_t {
     Emergency = 0,
     Command   = 1,
     Telemetry = 2,
+    Status    = 3,
 };
 
 // an 11-bit standard CAN identifier, 0x000-0x7FF
@@ -28,7 +29,7 @@ class CanId {
     CanId() = default;
 
     // pack a class and subaddress into an id
-    constexpr CanId(MsgClass cls, std::uint8_t subaddress) {
+    constexpr CanId(Band cls, std::uint8_t subaddress) {
         const int class_bits = std::to_underlying(cls) << kClassShift;
 
         raw_ = static_cast<std::uint16_t>(class_bits | subaddress);
@@ -37,10 +38,10 @@ class CanId {
     // wrap a raw 11-bit value taken off the wire, for transports only
     [[nodiscard]] static constexpr CanId from_raw(std::uint16_t bits) { return CanId(bits); }
 
-    [[nodiscard]] constexpr MsgClass cls() const {
+    [[nodiscard]] constexpr Band cls() const {
         // apply the mask first, then shift down to the low bits
         // the bits may name a reserved class, which callers reject with is_valid
-        return static_cast<MsgClass>((raw_ & kClassMask) >> kClassShift);
+        return static_cast<Band>((raw_ & kClassMask) >> kClassShift);
     }
 
     [[nodiscard]] constexpr std::uint8_t subaddress() const {
@@ -68,9 +69,9 @@ class CanId {
 inline constexpr CanId kMaxStandardId = CanId::from_raw(0x7FF);
 
 // the last id of a class range
-[[nodiscard]] constexpr CanId class_max(MsgClass cls) { return {cls, 0xFF}; }
+[[nodiscard]] constexpr CanId class_max(Band cls) { return {cls, 0xFF}; }
 
-// a class value is defined only over the dense range Emergency..Telemetry
-[[nodiscard]] constexpr bool is_valid(MsgClass cls) { return cls <= MsgClass::Telemetry; }
+// a class value is defined only over the dense range Emergency..Status
+[[nodiscard]] constexpr bool is_valid(Band cls) { return cls <= Band::Status; }
 
 }  // namespace chuds

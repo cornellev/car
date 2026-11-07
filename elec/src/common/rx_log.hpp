@@ -15,10 +15,11 @@ struct RxLog {
     int last_body{-1};
 
     void log(const chuds::Message& m) {
-        const bool body_state =
-            m.cls == chuds::BodyState::kClass && m.subaddress == chuds::BodyState::kSubaddress;
-        const bool to_me = m.cls == chuds::MsgClass::Command && m.subaddress == node;
-        if (!body_state && !to_me && m.cls != chuds::MsgClass::Emergency) {
+        const bool body_state = chuds::catalog_body<chuds::BodyState>(m).has_value();
+        const auto blink      = chuds::catalog_body<chuds::StatusBlink>(m);
+        const bool to_me      = (m.cls == chuds::Band::Command && m.subaddress == node) ||
+                           (blink && blink->node == node);
+        if (!body_state && !to_me && m.cls != chuds::Band::Emergency) {
             return;
         }
         if (body_state) {

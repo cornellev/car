@@ -11,8 +11,8 @@ struct Unmarked {
 };
 
 struct Marked {
+    static constexpr chuds::CanId kId{chuds::Band::Telemetry, 0x10};
     std::uint16_t a{};
-    static constexpr bool is_chuds_wire_body = true;
 };
 
 #ifdef BAD_MAKE_MESSAGE
@@ -28,8 +28,7 @@ using ReceiveBody = Marked;
 #endif
 
 [[maybe_unused]] void send_and_receive() {
-    static_cast<void>(
-        chuds::make_message(chuds::MsgClass::Telemetry, 0, chuds::MsgType::Update, SendBody{}));
+    static_cast<void>(chuds::make_message(SendBody{}));
     static_cast<void>(chuds::body_as<ReceiveBody>(chuds::Message{}));
 }
 }  // namespace

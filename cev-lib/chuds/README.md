@@ -130,9 +130,9 @@ Things the code doesn't say:
 
 - When `recv()` has no message, `rx.error()` says why. `Empty` just means nothing is waiting.
   `chuds::is_fault()` is true only for real problems such as bus-off.
-- `catalog_body<T>(m)` reads a catalog body only when `m` has that body's `kClass` and one of its
-  addresses, and for a command only when it is an `Update`. `body_as<T>` checks only the body
-  size, so read messages with `catalog_body<T>`.
+- `catalog_body<T>(m)` reads a catalog body only when `m` is on that body's `kId` and its length
+  is the padded size of `T`, so there is no need to match the class and subaddress first.
+  `body_as<T>` does the same check.
 - On the VCU, `bus.open("can0")` connects the transport and `bus.wait(timeout)` blocks until a
   frame arrives. Boards have neither: a board that takes commands polls the chip each loop pass.
 - A periodic `send()` may ignore its result, since the next send replaces a lost one. A one-shot
@@ -208,10 +208,11 @@ in phase. A node that hears no `BodyState` for 1 s falls back to safe states: ho
 parked, turn signals off, headlights held. A STOP applies the same safe states and latches until
 reset.
 
-front_aux, back_aux, and joulemeter also take a `StatusBlink` `Update` on `0x1NN`, their own
-subaddress, that sets their status LED's blink half-period in ms. They ignore 0, and the period
-returns to the firmware default on reset. Dev boards running `elec/src/devboard` take it too, on
-the shared subaddress `0x40`, so one command reaches every one of them.
+front_aux, back_aux, and joulemeter also take a `StatusBlink`, broadcast on `0x109`, that sets
+the status LED's blink half-period in ms of the node named in its `node` field. Each node ignores
+one that names another node, ignores 0, and returns to the firmware default period on reset. Dev
+boards running `elec/src/devboard` take it too, all with node id `0x40`, so one command reaches
+every one of them.
 
 For bench testing on Linux, `chudsctl` (`build/host/cev-lib/chuds/tools/chudsctl` from the repo
 root) sends and prints messages by name. The interface defaults to `can0`, and `-i` picks another:

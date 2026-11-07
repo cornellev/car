@@ -100,7 +100,7 @@ int main() {
             }
             const chuds::Message& m = *rx;
             rx_log.log(m);
-            if (m.cls == chuds::MsgClass::Emergency && m.type == chuds::MsgType::Stop) {
+            if (chuds::read_stop(m)) {
                 stopped = true;
                 body &= chuds::BodyState::kHeadlights;
                 apply(body);

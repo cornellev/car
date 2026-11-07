@@ -174,9 +174,8 @@ TEST_CASE("round-trips a chuds message over a CAN-FD interface") {
         return;
     }
     const Message msg{
-        .cls        = MsgClass::Telemetry,
+        .cls        = Band::Telemetry,
         .subaddress = 0x10,
-        .type       = MsgType::Update,
         .body       = {0x01, 0x39, 0x05},
         .body_len   = 3,
     };
@@ -188,9 +187,8 @@ TEST_CASE("round-trips a chuds message over a CAN-FD interface") {
     REQUIRE(r.has_value());
     const auto out = decode(*r);
     REQUIRE(out.has_value());
-    CHECK(out->cls == MsgClass::Telemetry);
+    CHECK(out->cls == Band::Telemetry);
     CHECK(out->subaddress == 0x10);
-    CHECK(out->type == MsgType::Update);
     REQUIRE(out->body_view().size() == 3);
     CHECK(out->body_view()[2] == 0x05);
 }

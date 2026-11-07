@@ -10,7 +10,6 @@
 #include <limits>
 #include <optional>
 #include <span>
-#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -20,39 +19,22 @@
 
 namespace chuds {
 
-enum class MsgType : std::uint8_t {
-    Update    = 0,
-    Heartbeat = 1,
-    Stop      = 2,
-    Action    = 3,
-    Dummy     = 4,
+// why a STOP was sent
+enum class StopReason : std::uint8_t {
+    Unknown   = 0,
+    Operator  = 1,  // e-stop button or base station
+    CommsLost = 2,  // VCU lost its command link
+    NodeFault = 3,  // a node reported a fault
 };
 
-// a type value is defined only over Update..Dummy
-[[nodiscard]] constexpr bool is_valid(MsgType type) { return type <= MsgType::Dummy; }
-
-// payload is [type][body_len][body...]
-// the explicit length recovers the true body size despite CAN-FD DLC padding
-inline constexpr std::size_t kTypeOffset    = 0;
-inline constexpr std::size_t kBodyLenOffset = 1;
-inline constexpr std::size_t kHeaderLen     = 2;
-inline constexpr std::size_t kMaxBody       = kMaxFdPayload - kHeaderLen;
-static_assert(kHeaderLen + kMaxBody == kMaxFdPayload);
-
-// read the header fields out of a frame's data
-[[nodiscard]] constexpr MsgType frame_type(const CanFrame& f) {
-    return static_cast<MsgType>(f.data[kTypeOffset]);
-}
-
-[[nodiscard]] constexpr std::uint8_t frame_body_len(const CanFrame& f) {
-    return f.data[kBodyLenOffset];
-}
+// payload is just the body, so the id says what it is
+// body_len is the frame length, which CAN-FD pads to a valid size
+inline constexpr std::size_t kMaxBody = kMaxFdPayload;
 
 // a decoded CHUDS message: the id fields (class + subaddress) and the typed body
 struct Message {
-    MsgClass cls{MsgClass::Telemetry};
+    Band cls{Band::Telemetry};
     std::uint8_t subaddress{};
-    MsgType type{MsgType::Dummy};
     std::array<std::uint8_t, kMaxBody> body{};
     std::uint8_t body_len{};
 
@@ -78,8 +60,9 @@ consteval bool has_no_padding_or_pointers() {
     return true;
 }
 
+// T owns its CAN id, as `static constexpr CanId kId{Band, sub};`
 template <class T>
-concept HasWireBodyMarker = requires { requires T::is_chuds_wire_body; };
+concept HasWireId = requires { requires std::same_as<std::remove_cv_t<decltype(T::kId)>, CanId>; };
 
 // satisfied when has_no_padding_or_pointers<T>() is a constant expression
 template <class T>
@@ -92,18 +75,18 @@ concept NoPaddingOrPointers =
 // bool, bit-fields, and enums without a fixed underlying type pass these checks but are unsafe
 template <class T>
 concept WireBody =
-    detail::HasWireBodyMarker<T> && std::is_trivially_copyable_v<T> &&
-    std::is_standard_layout_v<T> && sizeof(T) <= kMaxBody && detail::NoPaddingOrPointers<T>;
+    detail::HasWireId<T> && std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T> &&
+    sizeof(T) <= kMaxBody && detail::NoPaddingOrPointers<T>;
 
 namespace detail {
 
 // one message per WireBody rule, then WireBody itself so a rule missing here still fails
 template <class T>
 constexpr void check_wire_body() {
-    static_assert(HasWireBodyMarker<T>,
-                  "wire body must opt in with `static constexpr bool is_chuds_wire_body = true;` "
-                  "after checking it has no bool, bit-field, or enum without a fixed underlying "
-                  "type (chuds/docs/serialization.md)");
+    static_assert(HasWireId<T>,
+                  "wire body must opt in by owning its id with `static constexpr CanId kId{Band, "
+                  "sub};` after checking it has no bool, bit-field, or enum without a fixed "
+                  "underlying type (chuds/docs/serialization.md)");
     static_assert(std::is_trivially_copyable_v<T>, "body must be trivially copyable");
     static_assert(std::is_standard_layout_v<T>, "body must be standard-layout");
     static_assert(sizeof(T) <= kMaxBody, "body is larger than the CAN-FD payload");
@@ -116,34 +99,35 @@ constexpr void check_wire_body() {
 
 // build a message whose body is a trivially-copyable struct
 // the struct's bytes are the wire body, little-endian
-// returns nullopt if the class or type is invalid
+// the message goes out on the id the struct owns
+// returns nullopt if the class is invalid
 template <class T>
-[[nodiscard]] constexpr std::optional<Message> make_message(MsgClass cls, std::uint8_t sub,
-                                                            MsgType type, const T& value) {
+[[nodiscard]] constexpr std::optional<Message> make_message(const T& value) {
     // ensure the struct can be sent over wire
     detail::check_wire_body<T>();
 
-    if (!is_valid(cls) || !is_valid(type)) {
+    if (!is_valid(T::kId.cls())) {
         return std::nullopt;
     }
 
     const auto bytes = std::bit_cast<std::array<std::uint8_t, sizeof(T)>>(value);
 
-    Message m{.cls = cls, .subaddress = sub, .type = type};
+    Message m{.cls = T::kId.cls(), .subaddress = T::kId.subaddress()};
     std::copy_n(bytes.begin(), bytes.size(), m.body.begin());
-    m.body_len = sizeof(T);
+    m.body_len = round_up_fd_length(static_cast<std::uint8_t>(sizeof(T)));
 
     return m;
 }
 
 // read the body of a message back as a struct
-// returns nullopt if the body size is not exactly sizeof(T)
+// returns nullopt unless the id is T::kId and the frame length is the padded size of T
 template <class T>
 [[nodiscard]] constexpr std::optional<T> body_as(const Message& m) {
     // ensure the struct can be sent over wire
     detail::check_wire_body<T>();
 
-    if (m.body_len != sizeof(T)) {
+    if (CanId(m.cls, m.subaddress) != T::kId ||
+        m.body_len != round_up_fd_length(static_cast<std::uint8_t>(sizeof(T)))) {
         return std::nullopt;
     }
 
@@ -153,108 +137,67 @@ template <class T>
     return std::bit_cast<T>(bytes);
 }
 
-// a body always sent with kClass to its one kSubaddress
+// m's body as B when m is on B's id, see catalog.hpp
+// body_as checks the id and the padded length, so this is the same read
 template <class B>
-concept SingleAddressBody = requires {
-    { B::kClass } -> std::convertible_to<MsgClass>;
-    { B::kSubaddress } -> std::convertible_to<std::uint8_t>;
-};
-
-// a body sent with kClass to any one of its kSubaddresses
-template <class B>
-concept MultiAddressBody = requires {
-    { B::kClass } -> std::convertible_to<MsgClass>;
-    std::ranges::find(B::kSubaddresses, std::uint8_t{});
-};
-
-// a body whose class and addresses are part of its type, see catalog.hpp
-template <class B>
-concept CatalogBody = SingleAddressBody<B> || MultiAddressBody<B>;
-
-// whether subaddress is one of B's addresses
-template <CatalogBody B>
-[[nodiscard]] constexpr bool is_address_of(std::uint8_t subaddress) {
-    if constexpr (SingleAddressBody<B>) {
-        return subaddress == B::kSubaddress;
-    } else {
-        return std::ranges::find(B::kSubaddresses, subaddress) != B::kSubaddresses.end();
-    }
-}
-
-// m's body as B when m is sent to one of B's addresses
-// a command counts only as an Update, since boards act on nothing else
-template <CatalogBody B>
 [[nodiscard]] constexpr std::optional<B> catalog_body(const Message& m) {
-    if (m.cls != B::kClass || !is_address_of<B>(m.subaddress) ||
-        (B::kClass == MsgClass::Command && m.type != MsgType::Update)) {
-        return std::nullopt;
-    }
     return body_as<B>(m);
 }
 
 // make a STOP message
 // transmits an emergency class with a subaddress as the severity (0 is the most severe)
-// body contains [sender][detail...]
-// overly long detail is truncated to prevent failures
+// body contains [sender][reason]
 // never fails, so a stop can always be sent
 // only the VCU (pi/jetson) sends STOP, since each CAN id must have exactly one transmitter
 [[nodiscard]] constexpr Message make_stop(std::uint8_t severity, std::uint8_t sender,
-                                          std::string_view detail) {
-    constexpr std::size_t kMaxDetail = kMaxBody - 1;
-    const std::size_t n              = detail.size() < kMaxDetail ? detail.size() : kMaxDetail;
-
-    Message m{.cls = MsgClass::Emergency, .subaddress = severity, .type = MsgType::Stop};
-    m.body[0] = sender;
-    std::copy_n(detail.begin(), n, m.body.begin() + 1);
-    m.body_len = static_cast<std::uint8_t>(n + 1);
+                                          StopReason reason) {
+    Message m{.cls = Band::Emergency, .subaddress = severity};
+    m.body[0]  = sender;
+    m.body[1]  = std::to_underlying(reason);
+    m.body_len = round_up_fd_length(2);
 
     return m;
 }
 
-// a decoded STOP: severity from the subaddress, then [sender][detail...]
+// a decoded STOP: severity from the subaddress, then [sender][reason]
 struct StopView {
     std::uint8_t severity{};
     std::uint8_t sender{};
-    std::span<const std::uint8_t> detail{};
+    StopReason reason{};
 };
 
 // read a STOP, or nullopt if the message is not a well-formed STOP
 [[nodiscard]] constexpr std::optional<StopView> read_stop(const Message& m) {
-    if (m.cls != MsgClass::Emergency || m.type != MsgType::Stop || m.body_len < 1) {
+    if (m.cls != Band::Emergency || m.body_len != round_up_fd_length(2)) {
         return std::nullopt;
     }
 
     StopView s{};
     s.severity = m.subaddress;
     s.sender   = m.body[0];
-    s.detail   = m.body_view().subspan(1);
+    s.reason   = static_cast<StopReason>(m.body[1]);
 
     return s;
 }
 
-// the detail span points into m, so a temporary message would leave it dangling
-std::optional<StopView> read_stop(const Message&& m) = delete;
-
-// id = class + subaddress, payload = [type][body_len][body...]
+// id = class + subaddress, payload = body
 [[nodiscard]] constexpr std::optional<CanFrame> encode(const Message& m) {
-    if (!is_valid(m.cls) || !is_valid(m.type) || m.body_len > kMaxBody) {
+    if (!is_valid(m.cls) || m.body_len > kMaxBody) {
         return std::nullopt;
     }
 
     CanFrame f{};
-    f.id                   = CanId(m.cls, m.subaddress);
-    f.data[kTypeOffset]    = std::to_underlying(m.type);
-    f.data[kBodyLenOffset] = m.body_len;
+    f.id = CanId(m.cls, m.subaddress);
 
-    std::copy_n(m.body.begin(), m.body_len, f.data.begin() + kHeaderLen);
+    std::copy_n(m.body.begin(), m.body_len, f.data.begin());
 
     // round up to a valid CAN-FD length
     // the unused tail is already zero from init
-    f.len = round_up_fd_length(static_cast<std::uint8_t>(kHeaderLen + m.body_len));
+    f.len = round_up_fd_length(m.body_len);
     return f;
 }
 
-// fails only with NonStandardId, UnknownClass, BadLength, UnknownType, or BodyOverrun
+// fails only with NonStandardId, UnknownClass, or BadLength
 [[nodiscard]] constexpr std::expected<Message, RxError> decode(const CanFrame& f) {
     if (!f.id.is_standard()) {
         return std::unexpected(RxError::NonStandardId);
@@ -264,29 +207,17 @@ std::optional<StopView> read_stop(const Message&& m) = delete;
         return std::unexpected(RxError::UnknownClass);
     }
 
-    if (f.len < kHeaderLen || !is_valid_fd_len(f.len)) {
+    if (!is_valid_fd_len(f.len)) {
         return std::unexpected(RxError::BadLength);
-    }
-
-    if (!is_valid(frame_type(f))) {
-        return std::unexpected(RxError::UnknownType);
-    }
-
-    const std::uint8_t body_len = frame_body_len(f);
-
-    // the claimed body must fit within the frame
-    if (kHeaderLen + body_len > f.len) {
-        return std::unexpected(RxError::BodyOverrun);
     }
 
     Message m{
         .cls        = f.id.cls(),
         .subaddress = f.id.subaddress(),
-        .type       = frame_type(f),
     };
 
-    std::copy_n(f.data.begin() + kHeaderLen, body_len, m.body.begin());
-    m.body_len = body_len;
+    std::copy_n(f.data.begin(), f.len, m.body.begin());
+    m.body_len = f.len;
 
     return m;
 }

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <cstdint>
 #include <expected>
 #include <optional>
 #include <type_traits>
@@ -36,7 +37,7 @@ struct BadFrame {
     TxResult send(const CanFrame& /*f*/) { return {}; }
     RxResult recv() {
         CanFrame f{};
-        f.id  = CanId::from_raw(0x300);
+        f.id  = CanId::from_raw(0x400);
         f.len = 2;
         return f;
     }
@@ -68,6 +69,12 @@ struct Scripted {
     }
     [[nodiscard]] RxResult recv() const { return rx; }
 };
+
+// a body whose id names a reserved class
+struct ReservedClassBody {
+    static constexpr CanId kId{static_cast<Band>(4), 0x08};
+    std::uint8_t bits{};
+};
 }  // namespace
 
 static_assert(!std::is_copy_constructible_v<Bus<Loopback>>);
@@ -94,9 +101,8 @@ static_assert(!CanReportStatus<Bus<Loopback>>);
 TEST_CASE("a bus sends and receives a message without the caller touching a frame") {
     Bus<Loopback> bus;
     const Message m{
-        .cls        = MsgClass::Command,
+        .cls        = Band::Command,
         .subaddress = 0x40,
-        .type       = MsgType::Update,
         .body       = {0x01, 0x1E},
         .body_len   = 2,
     };
@@ -105,7 +111,7 @@ TEST_CASE("a bus sends and receives a message without the caller touching a fram
 
     const auto r = bus.recv();
     REQUIRE(r.has_value());
-    CHECK(r->cls == MsgClass::Command);
+    CHECK(r->cls == Band::Command);
     CHECK(r->subaddress == 0x40);
     REQUIRE(r->body_view().size() == 2);
     CHECK(r->body_view()[1] == 0x1E);
@@ -114,7 +120,7 @@ TEST_CASE("a bus sends and receives a message without the caller touching a fram
 TEST_CASE("a bus builds a struct body message in one send call") {
     Bus<Loopback> bus;
     const BodyState state{BodyState::kHeadlights};
-    CHECK(bus.send(MsgClass::Command, kBodyStateId, MsgType::Update, state).has_value());
+    CHECK(bus.send(state).has_value());
     const auto r = bus.recv();
     REQUIRE(r.has_value());
     const auto back = body_as<BodyState>(*r);
@@ -169,8 +175,7 @@ TEST_CASE("a struct send with an invalid class never reaches the transport") {
             .sends = &sends,
         },
     };
-    CHECK(bus.send(static_cast<MsgClass>(3), kBodyStateId, MsgType::Update, BodyState{}) ==
-          std::unexpected(TxError::Error));
+    CHECK(bus.send(ReservedClassBody{}) == std::unexpected(TxError::Error));
     CHECK(sends == 0);
 }
 
