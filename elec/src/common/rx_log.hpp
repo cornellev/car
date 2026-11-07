@@ -18,7 +18,7 @@ struct RxLog {
         const bool body_state = chuds::catalog_body<chuds::BodyState>(m).has_value();
         const auto blink      = chuds::catalog_body<chuds::StatusBlink>(m);
         const bool to_me      = (m.cls == chuds::Band::Command && m.subaddress == node) ||
-                                (blink && blink->node == node);
+                           (blink && blink->node == node);
         if (!body_state && !to_me && m.cls != chuds::Band::Emergency) {
             return;
         }

@@ -75,8 +75,8 @@ concept NoPaddingOrPointers =
 // bool, bit-fields, and enums without a fixed underlying type pass these checks but are unsafe
 template <class T>
 concept WireBody =
-    detail::HasWireId<T> && std::is_trivially_copyable_v<T> &&
-    std::is_standard_layout_v<T> && sizeof(T) <= kMaxBody && detail::NoPaddingOrPointers<T>;
+    detail::HasWireId<T> && std::is_trivially_copyable_v<T> && std::is_standard_layout_v<T> &&
+    sizeof(T) <= kMaxBody && detail::NoPaddingOrPointers<T>;
 
 namespace detail {
 
