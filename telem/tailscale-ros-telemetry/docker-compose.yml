@@ -11,7 +11,7 @@ services:
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_USERSPACE=false
       - TS_AUTH_ONCE=true
-      - TS_EXTRA_ARGS=--advertise-tags=tag:ros-device --ssh=true
+      - TS_EXTRA_ARGS=--advertise-tags=tag:general --ssh=true
       - TS_ENABLE_HEALTH_CHECK=true
       - TS_LOCAL_ADDR_PORT=127.0.0.1:9002
     volumes:
