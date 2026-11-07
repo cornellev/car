@@ -38,7 +38,7 @@
                 ];
               }
             )
-            
+
           ];
           shellHook = ''
             source <(python3 install/_local_setup_util_sh.py zsh)
