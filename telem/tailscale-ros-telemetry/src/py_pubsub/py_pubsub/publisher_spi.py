@@ -2,7 +2,7 @@
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String
-from .uc26_sensor_reader.read_shm import SensorShmReader
+from shm.read_shm import SensorShmReader
 import json
 
 class SpiPublisher(Node):

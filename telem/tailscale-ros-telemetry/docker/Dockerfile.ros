@@ -12,14 +12,15 @@ WORKDIR /pigpio
 RUN make && make install
 
 # copy and build ros-telemetry (this repo)
-COPY src/ /ros-telemetry/src/
+COPY tailscale-ros-telemetry/src/ /ros-telemetry/src/
+COPY shm/ /shm/
 WORKDIR /ros-telemetry
 RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
 
-COPY docker/entrypoint-ros.sh /entrypoint-ros.sh
-COPY docker/entrypoint-rosbag.sh /entrypoint-rosbag.sh
-COPY docker/entrypoint-discovery.sh /entrypoint-discovery.sh
-COPY docker/entrypoint-subscriber.sh /entrypoint-subscriber.sh
+COPY tailscale-ros-telemetry/docker/entrypoint-ros.sh /entrypoint-ros.sh
+COPY tailscale-ros-telemetry/docker/entrypoint-rosbag.sh /entrypoint-rosbag.sh
+COPY tailscale-ros-telemetry/docker/entrypoint-discovery.sh /entrypoint-discovery.sh
+COPY tailscale-ros-telemetry/docker/entrypoint-subscriber.sh /entrypoint-subscriber.sh
 RUN chmod +x /entrypoint-ros.sh /entrypoint-rosbag.sh /entrypoint-discovery.sh /entrypoint-subscriber.sh
 
 ENTRYPOINT ["/entrypoint-ros.sh"]

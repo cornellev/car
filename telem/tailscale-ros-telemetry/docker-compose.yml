@@ -30,8 +30,8 @@ services:
 
   discovery-server:
     build:
-      context: .
-      dockerfile: docker/Dockerfile.ros
+      context: ..
+      dockerfile: tailscale-ros-telemetry/docker/Dockerfile.ros
     entrypoint: ["/entrypoint-discovery.sh"]
     container_name: ros-discovery-server
     network_mode: service:tailscale
@@ -65,8 +65,8 @@ services:
 
   rosbag:
     build:
-      context: .
-      dockerfile: docker/Dockerfile.ros
+      context: ..
+      dockerfile: tailscale-ros-telemetry/docker/Dockerfile.ros
     container_name: rosbag
     profiles:
       - bag
@@ -86,8 +86,8 @@ services:
 
   ros:
     build:
-      context: .
-      dockerfile: docker/Dockerfile.ros
+      context: ..
+      dockerfile: tailscale-ros-telemetry/docker/Dockerfile.ros
     # devices:
     #   - ${GPIO_DEVICE:-/dev/gpiomem}:${GPIO_DEVICE:-/dev/gpiomem}
     restart: unless-stopped
@@ -112,8 +112,8 @@ services:
 
   subscriber:
     build:
-      context: .
-      dockerfile: docker/Dockerfile.ros
+      context: ..
+      dockerfile: tailscale-ros-telemetry/docker/Dockerfile.ros
     entrypoint: ["/entrypoint-subscriber.sh"]
     depends_on:
       tailscale:
