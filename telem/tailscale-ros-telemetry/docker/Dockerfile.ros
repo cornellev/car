@@ -15,7 +15,9 @@ RUN make && make install
 COPY tailscale-ros-telemetry/src/ /ros-telemetry/src/
 COPY shm/ /shm/
 WORKDIR /ros-telemetry
-RUN . /opt/ros/humble/setup.sh && colcon build --symlink-install
+# Copy packages into the install tree: colcon's symlink mode cannot handle
+# the shm package directory outside this workspace.
+RUN . /opt/ros/humble/setup.sh && colcon build
 
 COPY tailscale-ros-telemetry/docker/entrypoint-ros.sh /entrypoint-ros.sh
 COPY tailscale-ros-telemetry/docker/entrypoint-rosbag.sh /entrypoint-rosbag.sh
