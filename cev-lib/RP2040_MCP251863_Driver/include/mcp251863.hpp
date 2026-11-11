@@ -8,147 +8,13 @@
 #include <optional>
 #include <type_traits>
 
-#include "hardware/dma.h"
-#include "hardware/irq.h"
 #include "hardware/spi.h"
 #include "pico/stdlib.h"
 
 // Constants and magic numbers
 const uint MCP251863_BAUD_RATE = 16000000;
-const uint MAX_TRANSFER        = 80;  // 2 cmd + 8 header + 4 opt. rx timestamp + 64 payload + 2 crc
 const uint MCP251863_MAX_PAYLOAD = 64;
-
 const uint MCP251863_CLOCK_HZ = 40000000;
-
-// each category starts on its own 0x10 block, and the rest count up from there
-// NOLINTNEXTLINE(readability-enum-initial-value)
-enum class Error : uint8_t {
-    None = 0x00,
-
-    // Programmer errors
-    InvalidFifoNum = 0x10,
-    InvalidFifoDepth,
-    InvalidFilterNum,
-    InvalidPayloadSize,
-    IdOutOfRange,
-    InvalidBitTiming,
-    InvalidArgument,
-    NullPointer,
-    NoOperationPending,
-
-    // Transient / retryable
-    Busy = 0x20,
-    TxFifoFull,
-    RxFifoEmpty,
-
-    // Hardware / bus faults
-    SpiTimeout = 0x30,
-    PollTimeout,
-    ModeChangeTimeout,
-    OscillatorTimeout,
-    PllTimeout,
-    SclkdivTimeout,
-    BusOff,
-    RxOverflow,
-    TxAttemptsExhausted,
-    BadRegisterValue,
-};
-
-enum class ErrorCategory : uint8_t {
-    None       = 0x00,
-    Programmer = 0x10,
-    Transient  = 0x20,
-    Hardware   = 0x30,
-};
-
-constexpr ErrorCategory categoryOf(Error e) {
-    return static_cast<ErrorCategory>(static_cast<uint8_t>(e) & 0xF0);
-}
-constexpr bool isProgrammerError(Error e) { return categoryOf(e) == ErrorCategory::Programmer; }
-constexpr bool isTransient(Error e) { return categoryOf(e) == ErrorCategory::Transient; }
-constexpr bool isHardwareFault(Error e) { return categoryOf(e) == ErrorCategory::Hardware; }
-
-enum class RecoveryAction : uint8_t {
-    None,
-    FixCaller,
-    RetryLater,
-    Initialize,
-    WaitForBus,
-    Reinitialize,
-    CheckHardware
-};
-
-constexpr RecoveryAction recoveryFor(Error e) {
-    switch (e) {
-        case Error::None: return RecoveryAction::None;
-
-        case Error::Busy:
-        case Error::TxFifoFull:
-        case Error::RxFifoEmpty:
-        case Error::RxOverflow:
-        case Error::TxAttemptsExhausted: return RecoveryAction::RetryLater;
-
-        case Error::SpiTimeout:
-        case Error::PollTimeout:
-        case Error::ModeChangeTimeout:
-        case Error::BadRegisterValue: return RecoveryAction::Reinitialize;
-
-        case Error::BusOff: return RecoveryAction::WaitForBus;
-
-        case Error::OscillatorTimeout:
-        case Error::PllTimeout:
-        case Error::SclkdivTimeout: return RecoveryAction::CheckHardware;
-
-        default: return RecoveryAction::FixCaller;  // for remaining programming errors
-    }
-}
-
-constexpr const char* errorToString(Error e) {
-    switch (e) {
-        case Error::None: return "None";
-        case Error::InvalidFifoNum: return "InvalidFifoNum";
-        case Error::InvalidFifoDepth: return "InvalidFifoDepth";
-        case Error::InvalidFilterNum: return "InvalidFilterNum";
-        case Error::InvalidPayloadSize: return "InvalidPayloadSize";
-        case Error::IdOutOfRange: return "IdOutOfRange";
-        case Error::InvalidBitTiming: return "InvalidBitTiming";
-        case Error::InvalidArgument: return "InvalidArgument";
-        case Error::NullPointer: return "NullPointer";
-        case Error::NoOperationPending: return "NoOperationPending";
-        case Error::Busy: return "Busy";
-        case Error::TxFifoFull: return "TxFifoFull";
-        case Error::RxFifoEmpty: return "RxFifoEmpty";
-        case Error::SpiTimeout: return "SpiTimeout";
-        case Error::PollTimeout: return "PollTimeout";
-        case Error::ModeChangeTimeout: return "ModeChangeTimeout";
-        case Error::OscillatorTimeout: return "OscillatorTimeout";
-        case Error::PllTimeout: return "PllTimeout";
-        case Error::SclkdivTimeout: return "SclkdivTimeout";
-        case Error::BusOff: return "BusOff";
-        case Error::RxOverflow: return "RxOverflow";
-        case Error::TxAttemptsExhausted: return "TxAttemptsExhausted";
-        case Error::BadRegisterValue: return "BadRegisterValue";
-    }
-    return "Unknown";
-}
-
-// for functions that can also return non-Error types
-template <typename T>
-class Result {
-   public:
-    Result(const T& value) : value_(value), error_(Error::None) {}
-    Result(Error error) : value_(T()), error_(error) {}
-
-    [[nodiscard]] bool ok() const { return error_ == Error::None; }
-    explicit operator bool() const { return ok(); }
-    [[nodiscard]] Error error() const { return error_; }
-    [[nodiscard]] const T& value() const { return value_; }
-    [[nodiscard]] T& value() { return value_; }
-
-   private:
-    T value_;
-    Error error_;
-};
 
 // Enums for various device modes/configs
 
@@ -295,14 +161,12 @@ enum class IoPin : uint8_t { IO_MCP_INT0 = 0, IO_MCP_INT1 = 1 };
 
 enum class IoMode : uint8_t { IOMODE_MCP_INT = 0, IOMODE_MCP_GPIO_OUT = 1, IOMODE_MCP_GPIO_IN = 2 };
 
-enum class MessageType : uint8_t {
-    CAN_BASE_MCP    = 0,
-    CAN_FD_BASE_MCP = 1,
-    CAN_EXT         = 2,
-    CAN_FD_EXT      = 3
-};
+enum class MessageType : uint8_t { CAN_BASE_MCP = 0, CAN_FD_BASE_MCP = 1, CAN_EXT = 2, CAN_FD_EXT = 3 };
 
-enum class FifoOperationState : uint8_t { IDLE, PUSHING, POPPING, POP_DONE, PUSH_DONE };
+//   Uninitialized: before init(), or after it failed; FIFO setup and begin() are refused
+//   Configuring:   init() succeeded (or reset() ran), chip in config mode, FIFO setup allowed
+//   Running:       begin() succeeded, chip on the bus, FIFO setup refused
+enum class DriverState : uint8_t { Uninitialized, Configuring, Running };
 
 // Structs
 
@@ -313,10 +177,13 @@ struct BitTiming {
     uint8_t sjw;    // Synchronization jump width
 };
 
+constexpr uint8_t NoFilter = 0xFF;
+
 struct FifoInfo {
     bool configured = false;
     bool isTx       = false;
-    uint8_t rxFltNum{};  // only for RX FIFOs
+    uint8_t rxFltNum{};            // only for RX FIFOs
+    uint8_t rxFltNum2 = NoFilter;  // second filter
 };
 
 struct CanFdFrame {
@@ -326,12 +193,8 @@ struct CanFdFrame {
     bool ide;              // Extended ID flag
     bool fdf;              // FD frame flag
     bool brs;              // Bit rate switch flag
-    bool rtr;              // Remote transmission request
     bool esi;              // Error status indicator
-    bool sid11;            // SID11 field for CAN-FD base frames
-    bool valid;            // Frame contains valid data
     uint8_t filter_hit;    // Filter index that matched (RX only)
-    uint32_t sequence;     // Sequence number (TX only)
     bool timestamp_valid;  // Timestamp field is populated
     uint32_t timestamp;    // Received timestamp (RX only, if enabled)
     uint8_t data[64];      // Payload bytes
@@ -351,16 +214,7 @@ struct InitConfig {
     BitTiming dataBitTiming;
 };
 
-struct Status {
-    uint32_t interrupt_flags;
-    uint32_t rx_if;
-    uint32_t tx_if;
-    uint32_t rx_overflow_if;
-    uint32_t tx_attempt_if;
-    uint32_t trec;    // CiTREC - transmit/receive error count reg
-    uint32_t bdiag0;  // CiBDIAG0 - bus diagnostic register 0
-    uint32_t bdiag1;  // CiBDIAG1 - bus diagnostic register 1
-    uint32_t crc;
+struct BusErrorState {
     bool bus_off;
     bool tx_error_passive;
     bool rx_error_passive;
@@ -369,12 +223,24 @@ struct Status {
     bool error_warning;
     uint8_t tx_error_count;
     uint8_t rx_error_count;
-    // bool spi_crc_format_error;
-    // bool spi_crc_error;
+};
+
+struct Status {
+    uint32_t interrupt_flags;
+    uint32_t rx_if;
+    uint32_t tx_if;
+    uint32_t rx_overflow_if;
+    uint32_t tx_attempt_if;
+    BusErrorState errors;
+    uint32_t bdiag0;  // CiBDIAG0 - bus diagnostic register 0
+    uint32_t bdiag1;  // CiBDIAG1 - bus diagnostic register 1
+    uint32_t crc;
+    uint32_t spi_crc_errors;      
+    uint32_t ecc_double_errors;  
 };
 
 struct FifoStatus {
-    uint8_t fifo_num;
+    uint8_t fifo_index;
     bool tx_aborted;
     bool tx_lost_arbitration;
     bool tx_error;
@@ -383,22 +249,6 @@ struct FifoStatus {
     bool empty_or_full;
     bool half_empty_or_half_full;
     bool not_full_or_not_empty;
-};
-
-struct DriverStats {
-    // Exact : driver updates counters directly
-    uint32_t frames_tx_requested;
-    uint32_t frames_rx;
-    uint32_t tx_fifo_full_events;
-    uint32_t dma_timeouts;
-    uint32_t poll_timeouts;
-    uint32_t recoveries;
-    // Sampled : driver polls for these
-    uint32_t tx_arbitration_losses;
-    uint32_t tx_attempts_exhausted;
-    uint32_t tx_errors;
-    uint32_t rx_overflows;
-    uint32_t bus_off_events;
 };
 
 // Bit timing presets for a 40 MHz CAN clock.
@@ -411,204 +261,143 @@ inline constexpr BitTiming kBitTiming2M40MHz   = {0, 14, 3, 3};
 // Main class
 class MCP251863 {
    private:
-    static MCP251863* instance_;
-    static void dmaIrqHandler();
-    static void gpioIrqHandler(uint gpio, uint32_t events);
-
-    bool dmaInitialized = false;
-
-    int dma_tx_chan{};
-    int dma_rx_chan{};
-
-    dma_channel_config dma_tx_cfg{};
-    dma_channel_config dma_rx_cfg{};
-
-    uint8_t tx_buff[MAX_TRANSFER]{};
-    uint8_t rx_buff[MAX_TRANSFER]{};
-    uint8_t* user_rx_buff   = nullptr;
-    uint16_t user_fifo_addr = 0;
-    CanFdFrame user_frame{};
-
-    size_t transfer_len{};
-
-    volatile FifoOperationState fifo_op_state = FifoOperationState::IDLE;
-    volatile bool pending_fifo_uinc           = false;
-    volatile bool error_flag_pending          = false;
-    volatile bool rx_flag_pending             = false;
-    volatile bool tx_flag_pending             = false;
-
     spi_inst_t* spi_;
     uint chipSelectPin_;
     uint standbyPin_;
-    uint intPin_, int0Pin_, int1Pin_;
-    WriteMode writeMode_      = WriteMode::WM_MCP_NORM;
-    ReadMode readMode_        = ReadMode::RM_MCP_NORM;
-    bool rxTimestampsEnabled_ = false;
+    uint intPin_; // int0Pin_, int1Pin_ unused
+    WriteMode writeMode_ = WriteMode::WM_MCP_NORM;
+    ReadMode readMode_   = ReadMode::RM_MCP_NORM;
 
-    // store config info so it can be retrieved
-    // during recoveries
-    InitConfig lastConfig{};
+    InitConfig config_{};
 
-    DriverStats stats{};
+    DriverState state_ = DriverState::Uninitialized;
 
-    FifoInfo fifoInfo[32];
+    uint32_t spiCrcErrors_    = 0; // counted by crcCheckPassed, reported in Status
+    uint32_t eccDoubleErrors_ = 0; // counted by eccCheckPassed, reported in Status
 
-    bool bus_off_latched = false;
-    bool txlarb_latched  = false;
-    bool txerr_latched   = false;
+    FifoInfo fifoInfo[31];
 
-    // DMA-related functions
-    Error initDMA();
-    void spiTransferDMA(size_t len);
-    void finishTransfer();
+    // spi reset - resets all registers to default values
+    int reset();
 
     void csSelect() const;
     void csDeselect() const;
 
-    // Asynchronous SPI read/write transactions w/ DMA
-    Error dmaReadAddr(uint16_t startAddr, uint8_t* dst, size_t len);
-    Error dmaWriteAddr(uint16_t startAddr, const uint8_t* data, size_t len);
-
     // Helper functions
-    Error readReg(uint16_t addr, uint32_t* dst);
-    Error writeReg(uint16_t addr, uint32_t value);
-    Error waitForOpMode(ControllerMode target);
-    Error waitForOpMode(ControllerMode target, int maxIters, uint32_t delayUs);
-    Error pollRegisterBit(uint16_t addr, uint8_t mask, bool wantSet, Error timeoutType);
-    Error pollRegisterBit(uint16_t addr, uint8_t mask, bool wantSet, int maxIters, uint32_t delayUs,
-                          Error timeoutType);
-    Error updateByte(uint16_t addr, uint8_t field, uint8_t value);
-    [[nodiscard]] Error checkFifo(uint8_t fifoNum, bool wantTx) const;
-    Error readFifoUserAddress(uint16_t fifoPointAddr, size_t objectSize, uint16_t* messageAddr);
-    Error serviceFifoUinc();
+    int readReg(uint16_t addr, uint32_t* dst);
+    int writeReg(uint16_t addr, uint32_t value);
+    int readOpMode(uint8_t* opmod);
+    int waitForOpMode(ControllerMode target);
+    int pollRegisterBit(uint16_t addr, uint8_t mask, bool wantSet);
+    int updateByte(uint16_t addr, uint8_t field, uint8_t value);
+    int checkFifo(uint8_t fifoNum, bool wantTx) const;
+    int readFifoUserAddress(uint8_t fifoNum, size_t slotSize, uint16_t* messageAddr);
+    
+    int configureDevice(const InitConfig& config);
 
-    Error configureDevice(const InitConfig& config);
-
-    Error initGeneralPurposeFifo(uint8_t fifoNum, FifoMode fifoMode, FifoPayloadSize plSize,
+    int initGeneralPurposeFifo(uint8_t fifoNum, FifoMode fifoMode, FifoPayloadSize plSize,
                                  uint8_t fSize, uint8_t prioNum, TxRetransmitMode retranMode,
-                                 const FifoInterruptFlag* intFlagArray, size_t intFlagSize);
+                                 uint8_t intFlags);
 
-    Error initTransmitEventFifo(uint8_t fSize, const FifoInterruptFlag* intFlagArray,
-                                size_t intFlagSize);
-    Error initTransmitQueue(FifoPayloadSize plSize, uint8_t fSize, uint8_t prioNum,
-                            TxRetransmitMode retranMode, const FifoInterruptFlag* intFlagArray,
-                            size_t intFlagSize);
+    // checks whether configuring fifoNum still fits the 2 KB message RAM.
+    int fifoRamFits(uint8_t fifoNum, bool isTx) const;
 
     // route one standard-ID filter to a FIFO and enable it
-    Error initFilter(uint8_t fltNum, uint8_t fifoNum, uint16_t canSID, uint16_t sidMask);
+    int initFilter(uint8_t fltNum, uint8_t fifoNum, uint16_t canSID, uint16_t sidMask);
 
-    Error setControllerMode(ControllerMode mode);
-    [[nodiscard]] Error setTransceiverMode(TransceiverMode mode) const;
-    Error setInterrupts(const InterruptEnable* intEnArray, size_t intEnSize);
+    // turn off one filter
+    int disableFilter(uint8_t fltNum);
+
+    // true if an RX FIFO other than exceptFifo already routes filter fltNum
+    bool filterInUse(uint8_t fltNum, uint8_t exceptFifo) const;
+
+    // turn off the FIFO's filters if it is RX, then clear the FIFO's fifoInfo entry.
+    int releaseFifo(uint8_t fifoNum);
+
+    int setControllerMode(ControllerMode mode);
+    void setTransceiverMode(TransceiverMode mode) const;
+
+    // blocking SPI read/write transactions
+    // during runtime, they effectively only fail when there is a CRC mismatch
+    int readAddr(uint16_t startAddr, uint8_t* dst, size_t len);
+    int writeAddr(uint16_t startAddr, const uint8_t* data, size_t len);
+    // writeAddr without the CRC flag check
+    int writeAddrUnchecked(uint16_t startAddr, const uint8_t* data, size_t len);
+    // reads and clears CRCERRIF/FERRIF, counts crc errors; false if either was set
+    bool crcCheckPassed();
+    // reads and clears DEDIF/SECIF, counts double errors; false if a double error was seen
+    bool eccCheckPassed();
+
+    // write the nominal and data bit timing; only valid in config mode
+    int setBitTiming(BitTiming nominalTiming, BitTiming dataTiming);
 
    public:
-    Error readOpMode(uint8_t* opmod);
-    // Blocking SPI read/write transactions
-    Error readAddr(uint16_t startAddr, uint8_t* dst, size_t len);
-    Error writeAddr(uint16_t startAddr, const uint8_t* data, size_t len);
     // make a driver bound to SPI and the pins
-    MCP251863(spi_inst_t* ispi, uint iCSPin, uint iSTBYPin, uint iINTPin, uint iINT0Pin,
-              uint iINT1Pin);
+    MCP251863(spi_inst_t* ispi, uint iCSPin, uint iSTBYPin, uint iINTPin);
 
     // initialize the controller with defaults
-    Error init();
+    int init();
     // initialize controller with a caller-provided timing
-    Error init(const InitConfig& config);
+    int init(const InitConfig& config);
 
-    // optionally set timing of registers
-    // (already initialized to default values by init())
-    Error setBitTiming(BitTiming nominalTiming, BitTiming dataTiming);
+    // true while nINT is low: an RX frame is waiting or an RX overflow has occurred
+    bool interruptPending() const;
 
-    [[nodiscard]] Error enableErrorInterrupts() const;
-    Error enableTxInterrupts();
-    Error enableRxInterrupts();
-
-    [[nodiscard]] bool errorInterruptPending() const { return error_flag_pending; }
-    [[nodiscard]] bool rxInterruptPending() const { return rx_flag_pending; }
-    [[nodiscard]] bool txInterruptPending() const { return tx_flag_pending; }
-
-    void clearErrorInterruptPending() { error_flag_pending = false; }
-    void clearRxInterruptPending() { rx_flag_pending = false; }
-    void clearTxInterruptPending() { tx_flag_pending = false; }
+    // which RX FIFOs have a frame waiting (C1RXIF)
+    // plus which RX FIFOs have overflowed (C1RXOVIF)
+    // bit n = FIFO n
+    int pendingRxFifos(uint32_t* rxMask, uint32_t* overflowMask);
 
     // init() does NOT configure any FIFOs. Must call these functions
     // to configure one more general-purpose FIFO after init()
-    // fifoNum & fltNum range: 0 - 30
-    Error configureTxFifo(uint8_t fifoNum);
-    Error configureTxFifo(uint8_t fifoNum, uint8_t prioNum);
-    // priority number range: 0 - 30
+    // fifoNum range: 0 - 30, fltNum range: 0 - 31
     // higher number = higher priority to send msgs onto bus
-    Error configureRxFifo(uint8_t fifoNum, uint8_t fltNum, uint16_t canSID,
+    int configureTxFifo(uint8_t fifoNum, uint8_t prioNum = 0);
+    int configureRxFifo(uint8_t fifoNum, uint8_t fltNum, uint16_t canSID,
                           uint16_t sidMask = 0x7FF);
     // suscribes the RX FIFO to an ID
     // if 2 RX FIFOs suscribe to the same ID, the FIFO with
     // the lower fitNum has higher priority (msg would be passed
     // into *that* FIFO)
-    Error configureRxFifo(uint8_t fifoNum, uint16_t canSID);
-    // fltNum = fifoNum
-    Error disableFifo(uint8_t fifoNum);
+    int configureRxFifo(uint8_t fifoNum, uint16_t canSID);
+    // map 2 discrete IDs to an RX FIFO, using filters fifoNum and 31 - fifoNum
+    int configureRxFifoTwoIds(uint8_t fifoNum, uint16_t canSID1, uint16_t canSID2);
+
+    // turns off the FIFO's filter and marks it unusable in the driver
+    // before begin(), it shrinks the FIFO to 1 message to free up RAM.
+    // After begin(), it just empties the FIFO (FRESET)
+    int disableFifo(uint8_t fifoNum);
 
     // after init() is called, device is still in configuration mode
     // so user can freely configure FIFOs. After configuring FIFOs,
     // user must call begin() to enter normal mode
-    Error begin();
+    int begin();
 
-    // can try reinitializing the MCP after a timeout error
-    Error recover();
-    // abort a DMA transaction
-    void abort();
+    // queue a CAN FD frame on a TX FIFO and request it be sent
+    // returns 0 when DriverState != Running, invalid FIFO, SPI error, or the frame is 
+    // longer than the FIFO's payload size. Returns 1 otherwise
+    // if FIFO was full, *queued is false and nothing is written to FIFO
+    int send_canfd(uint8_t fifoNum, uint32_t id, const uint8_t* data, size_t len, bool brs,
+                   bool* queued);
 
-    // spi reset - resets all registers to default values
-    Error reset();
-
-    // kickstart DMA: push CAN FD frame to a TX FIFO
-    Error start_push_canfd(uint8_t fifoNum, uint32_t id, const uint8_t* data, size_t len, bool brs,
-                           bool extended_id = false);
-
-    // alternative
-    Error start_push_frame(uint8_t fifoNum, const CanFdFrame& frame);
-
-    // returns whether DMA "push" transaction finished
-    Error poll_push();
-
-    // tell TX FIFO to send all its msgs over to the bus
-    // should wait until poll_push returns Error::None before requesting
-    Error request_send(uint8_t fifoNum);
-
-    // user must call this before calling start_push_canfd/frame again
-    // will prob remove this later, for now it's necessary
-    Error clear_send();
-
-    // kickstart DMA: pop and decode CAN FD frame from a RX FIFO
-    Error start_pop_canfd(uint8_t fifoNum);
-
-    // returns whether DMA "pop" transaction finished
-    Error poll_pop();
-
-    // retrieve popped frame once poll_read() returns Error::None
-    Result<CanFdFrame> get_read_frame();
+    // pop the oldest frame from an RX FIFO
+    // returns 0 under same conditions as send_canfd
+    // if FIFO was empty, *received is false and nothing is put into *frame
+    int read_frame(uint8_t fifoNum, CanFdFrame* frame, bool* received);
 
     // configure INT0/INT1 as interrupt pins or GPIOs
-    Error setPinMode(IoPin pin, IoMode mode);
+    int setPinMode(IoPin pin, IoMode mode);
 
-    // read controller-wide interrupt, error, and SPI CRC status registers
-    Result<Status> getStatus();
+    // read controller-wide interrupt, error, and SPI CRC status registers (9 SPI reads)
+    int getStatus(Status* status);
+
+    // read only the bus error state (1 SPI read)
+    int getBusErrors(BusErrorState* errors);
 
     // read status flags for one FIFO
-    Result<FifoStatus> getFIFOStatus(uint8_t fifoNum);
+    int getFIFOStatus(uint8_t fifoNum, FifoStatus* status);
 
-    Error clearRxOverflow(uint8_t fifoNum);
-
-    // read driver stats; counts accumulate over time
-    // could be useful for analyzing long-term driver behavior?
-    [[nodiscard]] DriverStats getStats() const { return stats; }
-    // reset driver stats
-    void resetStats() { stats = DriverStats{}; }
-
-    Result<int> getTXCode();
-    Result<int> getRXCode();
-    Result<int> getFLTCode();
-    Result<int> getICode();
+    int clearRxOverflow(uint8_t fifoNum);
 };
 
 #endif
