@@ -1,5 +1,5 @@
 
-#include <stdio.h>
+#include <cstdio>
 
 #include "hardware/spi.h"
 #include "mcp251863.hpp"
@@ -14,7 +14,9 @@ static constexpr uint INT_PIN  = 25;
 static constexpr uint INT0_PIN = 26;
 static constexpr uint INT1_PIN = 27;
 
-static void print_frame(const CanFdFrame& frame) {
+namespace {
+
+void print_frame(const CanFdFrame& frame) {
     printf("id=0x%03X  len=%d  fdf=%d  brs=%d  ide=%d  esi=%d  filter=%d  data=", frame.id,
            frame.len, frame.fdf, frame.brs, frame.ide, frame.esi, frame.filter_hit);
     for (int i = 0; i < frame.len; i++) {
@@ -22,6 +24,8 @@ static void print_frame(const CanFdFrame& frame) {
     }
     printf("\n");
 }
+
+}  // namespace
 
 int main() {
     stdio_init_all();
@@ -56,12 +60,12 @@ int main() {
         if (mcp.rxInterruptPending()) {
             mcp.clearRxInterruptPending();
 
-            Error err = mcp.start_pop_canfd(0);
+            const Error err = mcp.start_pop_canfd(0);
             if (err == Error::None) {
                 while (mcp.poll_pop() == Error::Busy) {
                     tight_loop_contents();
                 }
-                CanFdFrame frame = mcp.get_read_frame().value();
+                const CanFdFrame frame = mcp.get_read_frame().value();
                 if (frame.valid) {
                     received++;
                     printf("Interrupt fired: [%d] ", received);
