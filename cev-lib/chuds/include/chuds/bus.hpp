@@ -97,6 +97,13 @@ class Bus {
         return t_.ready();
     }
 
+    // Retry transport initialization, only for transports that support it.
+    [[nodiscard]] bool retry_init()
+        requires requires(T& t) { t.retry_init(); }
+    {
+        return t_.retry_init();
+    }
+
     // the controller's error state, only for transports that report it
     [[nodiscard]] BusStatus status()
         requires requires(T& t) { t.status(); }
