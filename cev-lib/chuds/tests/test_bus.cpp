@@ -113,13 +113,14 @@ TEST_CASE("a bus sends and receives a message without the caller touching a fram
 
 TEST_CASE("a bus builds a struct body message in one send call") {
     Bus<Loopback> bus;
-    const BodyState state{BodyState::kHeadlights};
+    BodyState state{};
+    state.set_headlights(true);
     CHECK(bus.send(MsgClass::Command, kBodyStateId, MsgType::Update, state).has_value());
     const auto r = bus.recv();
     REQUIRE(r.has_value());
     const auto back = body_as<BodyState>(*r);
     REQUIRE(back.has_value());
-    CHECK(back->bits == BodyState::kHeadlights);
+    CHECK(back->raw() == state.raw());
 }
 
 TEST_CASE("a quiet bus reports Empty") {

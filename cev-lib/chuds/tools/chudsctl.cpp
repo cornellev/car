@@ -30,15 +30,26 @@ struct NamedValue {
     std::uint8_t value;
 };
 
-// body output bits by command-line name
-constexpr std::array<NamedValue, 6> kOutputs = {{
-    {"headlights", chuds::BodyState::kHeadlights},
-    {"left", chuds::BodyState::kLeftTurn},
-    {"right", chuds::BodyState::kRightTurn},
-    {"hazards", chuds::BodyState::kLeftTurn | chuds::BodyState::kRightTurn},
-    {"horn", chuds::BodyState::kHorn},
-    {"wiper", chuds::BodyState::kWiper},
-}};
+// set one named body output on s, false if name is not a known output
+bool set_output(chuds::BodyState& s, std::string_view name) {
+    if (name == "headlights") {
+        s.set_headlights(true);
+    } else if (name == "left") {
+        s.set_left_turn(true);
+    } else if (name == "right") {
+        s.set_right_turn(true);
+    } else if (name == "hazards") {
+        s.set_left_turn(true);
+        s.set_right_turn(true);
+    } else if (name == "horn") {
+        s.set_horn(true);
+    } else if (name == "wiper") {
+        s.set_wiper(true);
+    } else {
+        return false;
+    }
+    return true;
+}
 
 // node ids by command-line name
 constexpr std::array<NamedValue, 4> kNodes = {{
@@ -106,19 +117,15 @@ int run_dump(Bus& bus) {
 }
 
 int run_body(Bus& bus, int argc, char** argv, int first) {
-    using chuds::BodyState;
-    std::uint8_t bits{};
+    chuds::BodyState body{};
     for (int i = first; i < argc; ++i) {
-        const auto* const it =
-            std::ranges::find(kOutputs, std::string_view{argv[i]}, &NamedValue::name);
-        if (it == kOutputs.end()) {
+        if (!set_output(body, argv[i])) {
             std::fprintf(stderr, "unknown output: %s\n", argv[i]);
             return 2;
         }
-        bits |= it->value;
     }
 
-    std::printf("holding body state 0x%02x, ctrl-c to release\n", bits);
+    std::printf("holding body state 0x%02x, ctrl-c to release\n", body.raw());
     using Clock = std::chrono::steady_clock;
     bool blink_on{};
     auto next_send  = Clock::now();
@@ -131,9 +138,8 @@ int run_body(Bus& bus, int argc, char** argv, int first) {
             next_send  = now;
         }
         if (now >= next_send) {
-            const auto out =
-                static_cast<std::uint8_t>(blink_on ? bits | BodyState::kBlinkPhase : bits);
-            const auto st = bus.send(BodyState{out});
+            body.set_blink_phase(blink_on);
+            const auto st = bus.send(body);
             if (!st) {
                 std::fprintf(stderr, "send failed: %d\n", std::to_underlying(st.error()));
             }

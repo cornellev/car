@@ -9,14 +9,13 @@
 #include "chuds/mcp_transport.hpp"
 #include "chuds/message.hpp"
 #include "common/can_health.hpp"
+#include "common/can_rx.hpp"
 #include "common/interval.hpp"
-#include "common/status_blink.hpp"
+#include "common/status_led.hpp"
 #include "config.hpp"
 #include "pico/stdlib.h"
 
 constexpr std::uint32_t kBlinkHalfPeriodMs = 500;
-// frames handled per loop pass, the mcp rx fifo depth, so a flooded bus cannot starve the timers
-constexpr int kMaxRxPerPass = 8;
 // "7FF##1" plus 64 bytes as hex
 constexpr std::size_t kMaxLine = 6 + 2 * chuds::kMaxFdPayload;
 
@@ -74,8 +73,8 @@ struct LineReader {
 };
 
 // print each waiting bus frame as a line, and act on a StatusBlink to this board
-void forward_rx(chuds::Mcp251863Transport& can, cev::Interval& blink) {
-    for (int i = 0; i < kMaxRxPerPass; ++i) {
+void forward_rx(chuds::Mcp251863Transport& can, cev::StatusLed& status) {
+    for (int i = 0; i < cev::kMaxRxPerPass; ++i) {
         const auto rx = can.recv();
         if (!rx) {
             return;
@@ -86,7 +85,7 @@ void forward_rx(chuds::Mcp251863Transport& can, cev::Interval& blink) {
         }
         std::printf("\n");
         if (const auto m = chuds::decode(*rx)) {
-            cev::apply_status_blink(*m, chuds::devboard::kNodeId, blink);
+            status.apply_status_blink(*m, chuds::devboard::kNodeId);
         }
     }
 }
@@ -122,11 +121,6 @@ void forward_serial(chuds::Mcp251863Transport& can, LineReader& r) {
 int main() {
     stdio_init_all();
 
-    for (const unsigned led : kStatusLeds) {
-        gpio_init(led);
-        gpio_set_dir(led, GPIO_OUT);
-    }
-
     chuds::Mcp251863Transport can{{
         .sck  = kSpiSck,
         .mosi = kSpiMosi,
@@ -136,15 +130,14 @@ int main() {
         .nint = kMcpInt,
     }};
 
-    bool led_on{};
     LineReader reader;
-    cev::Interval blink{kBlinkHalfPeriodMs};
+    cev::StatusLed status{kStatusLeds, kBlinkHalfPeriodMs};
     cev::Interval report{1000};
     cev::CanHealth can_health;
 
     while (true) {
         can_health.check(can);
-        forward_rx(can, blink);
+        forward_rx(can, status);
         forward_serial(can, reader);
 
         // repeated so a serial console opened after boot still sees it
@@ -152,11 +145,6 @@ int main() {
             std::printf("can init failed\n");
         }
 
-        if (blink.due()) {
-            led_on = !led_on;
-            for (const unsigned led : kStatusLeds) {
-                gpio_put(led, led_on);
-            }
-        }
+        status.tick();
     }
 }

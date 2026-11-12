@@ -46,7 +46,7 @@ themselves.
 - **`bool`:** only the bytes `0x00` and `0x01` are valid. Any other byte, such as `0x02`, is
   undefined behavior: the compiler may treat the same field as true in one `if` and false in the
   next. Never put a `bool` in a body. Use a `std::uint8_t` and test `!= 0`, or pack flags into a
-  bitmask like `BodyState::bits`.
+  `std::uint8_t` behind named accessors, as `BodyState` does.
 
 ## Adding a body
 
