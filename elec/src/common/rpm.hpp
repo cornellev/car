@@ -55,6 +55,8 @@ struct RpmSample {
     }
     const double rpm =
         static_cast<double>(pulses) * 60'000'000.0 / (32.0 * static_cast<double>(elapsed_us));
+    // rpm is never negative, so adding 0.5 rounds correctly
+    // NOLINTNEXTLINE(bugprone-incorrect-roundings)
     return rpm >= 65535.0 ? 65535 : static_cast<std::uint16_t>(rpm + 0.5);
 }
 

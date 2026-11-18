@@ -63,12 +63,10 @@ static_assert(WireBody<Array>);
 struct Unmarked {
     std::uint16_t a{};
 };
-// NOLINTNEXTLINE(cppcoreguidelines-special-member-functions)
 struct NotTriviallyCopyable {
     std::uint16_t a{};
     static constexpr bool is_chuds_wire_body = true;
     NotTriviallyCopyable()                   = default;
-    // NOLINTNEXTLINE(modernize-use-equals-default)
     NotTriviallyCopyable(const NotTriviallyCopyable& other) : a(other.a) {}
 };
 class NotStandardLayout {

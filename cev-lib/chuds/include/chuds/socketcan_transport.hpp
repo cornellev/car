@@ -101,7 +101,6 @@ class SocketCanTransport {
         addr.can_family  = AF_CAN;
         addr.can_ifindex = ifindex;
         // bind takes the generic sockaddr, the kernel reads it as sockaddr_can
-        // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
         if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0) {
             ::close(fd);
             return false;

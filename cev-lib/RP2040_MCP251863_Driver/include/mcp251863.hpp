@@ -21,7 +21,6 @@ const uint MCP251863_MAX_PAYLOAD = 64;
 const uint MCP251863_CLOCK_HZ = 40000000;
 
 // each category starts on its own 0x10 block, and the rest count up from there
-// NOLINTNEXTLINE(readability-enum-initial-value)
 enum class Error : uint8_t {
     None = 0x00,
 

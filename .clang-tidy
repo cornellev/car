@@ -1,44 +1,16 @@
 ---
 # the rp2040 reaches its registers through fixed addresses, so that analyzer check is noise
-# signed/unsigned comparisons here already cast explicitly, so std::cmp_* adds nothing
 Checks: >
-  readability-*,
-  cppcoreguidelines-*,
   clang-analyzer-*,
   bugprone-*,
-  modernize-*,
   performance-*,
-  misc-*,
   portability-*,
   -bugprone-easily-swappable-parameters,
-  -readability-math-missing-parentheses,
-  -readability-uppercase-literal-suffix,
-  -readability-identifier-length,
-  -modernize-use-trailing-return-type,
-  -*-avoid-c-arrays,
-  -*-magic-numbers,
-  -readability-braces-around-statements,
-  -modernize-use-designated-initializers,
   -portability-avoid-pragma-once,
-  -misc-non-private-member-variables-in-classes,
-  -readability-redundant-member-init,
-  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
-  -cppcoreguidelines-pro-bounds-array-to-pointer-decay,
-  -cppcoreguidelines-pro-type-vararg,
-  -readability-implicit-bool-conversion,
-  -readability-convert-member-functions-to-static,
-  -cppcoreguidelines-avoid-non-const-global-variables,
-  -modernize-use-std-print,
-  -clang-analyzer-core.FixedAddressDereference,
-  -modernize-use-integer-sign-comparison
+  -clang-analyzer-core.FixedAddressDereference
 # report every header except vendored code, system headers are skipped by default
 HeaderFilterRegex: ".*"
 ExcludeHeaderFilterRegex: ".*/vendor/.*"
 CheckOptions:
-  # we use "do { ... } while (0)" to make macros act like a statement
-  cppcoreguidelines-avoid-do-while.IgnoreMacros: true
-  # so a function is not scored complex for the if inside each such macro
-  readability-function-cognitive-complexity.IgnoreMacros: true
   # the default list minus std::expected, since Bus::send results may be ignored
   bugprone-unused-return-value.CheckedReturnTypes: "::std::error_code;::std::error_condition;::std::errc;::boost::system::error_code"
-  misc-include-cleaner.IgnoreHeaders: "pico/.*;hardware/.*"
