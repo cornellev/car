@@ -57,9 +57,7 @@ class Mcp251863Transport {
         // init needs the spi and pin setup above
         // filter 0 with an empty mask routes every standard-id frame to the rx fifo
         // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
-        init_ok_ = mcp_.init() == Error::None && mcp_.configureTxFifo(kTxFifo) == Error::None &&
-                   mcp_.configureRxFifo(kRxFifo, 0, 0, 0) == Error::None &&
-                   mcp_.begin() == Error::None;
+        static_cast<void>(retry_init());
     }
 
     // a move keeps the setup already done, so a Bus can take the transport over
@@ -96,6 +94,16 @@ class Mcp251863Transport {
 
     // whether the chip initialized
     [[nodiscard]] bool ready() const { return init_ok_; }
+
+    // Retry a failed setup in place, reusing the driver's DMA resources.
+    // An initialized controller is left running.
+    [[nodiscard]] bool retry_init() {
+        if (init_ok_) return true;
+        init_ok_ = mcp_.init() == Error::None && mcp_.configureTxFifo(kTxFifo) == Error::None &&
+                   mcp_.configureRxFifo(kRxFifo, 0, 0, 0) == Error::None &&
+                   mcp_.begin() == Error::None;
+        return init_ok_;
+    }
 
     // the chip's error state, read over spi
     // a chip that failed init is not on the bus, so it reports Off

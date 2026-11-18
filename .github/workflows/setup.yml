@@ -1,31 +1,22 @@
 name: setup
 
 # runs the setup scripts on macos, linux, linux arm, and windows
-# tests chuds on linux arm to verify pi can build with the same install
+# the linux jobs run in bare containers, so the scripts install everything a new computer lacks
+# tests chuds on linux arm to verify pi can build with the same install, and on macos
 on:
   push:
     branches: [main]
-    paths:
+    paths: &paths
       - .github/workflows/setup.yml
-      - elec/setup/**
-      - elec/cmake/**
-      - elec/CMakeLists.txt
-      - elec/justfile
-      - vendor/pico-sdk
-      - cev-lib/chuds/**
-      - cev-lib/justfile
+      - .gitmodules
+      - CMakeLists.txt
+      - CMakePresets.json
       - justfile
+      - elec/**
+      - cev-lib/**
+      - vendor/pico-sdk
   pull_request:
-    paths:
-      - .github/workflows/setup.yml
-      - elec/setup/**
-      - elec/cmake/**
-      - elec/CMakeLists.txt
-      - elec/justfile
-      - vendor/pico-sdk
-      - cev-lib/chuds/**
-      - cev-lib/justfile
-      - justfile
+    paths: *paths
   schedule:
     - cron: "0 12 * * 1"
   workflow_dispatch:
@@ -46,26 +37,41 @@ jobs:
           - os: macos-latest
             setup: ./setup/setup-macos.sh
           - os: ubuntu-latest
+            container: debian:12
             setup: ./setup/setup-linux.sh
           - os: ubuntu-24.04-arm
+            container: ubuntu:24.04
             setup: ./setup/setup-linux.sh
           - os: windows-latest
             setup: powershell -ExecutionPolicy Bypass -File setup/setup-windows.ps1
     runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    # apt in a bare container would otherwise wait on tzdata's timezone prompt
+    env:
+      DEBIAN_FRONTEND: noninteractive
     defaults:
       run:
         working-directory: elec
     steps:
+      # a student clones with git, but a bare container has none
+      # without git, checkout downloads the files with no .git, so the setup script can't fetch submodules
+      - name: install git (container)
+        if: matrix.container
+        working-directory: /
+        # the container runs as root on a workspace the runner owns, which git refuses by default
+        run: |
+          apt-get update && apt-get install -y git
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       # no submodules here, because the setup script fetches them
       - uses: actions/checkout@v7
 
       - name: run setup script
         run: ${{ matrix.setup }}
 
-      # doctor runs after the build because the build downloads the arm compiler and picotool
       - name: build firmware (unix)
         if: runner.os != 'Windows'
-        run: just build && just doctor
+        run: just doctor && just build
 
       # winget writes PATH to the registry, which later steps don't reread
       - name: build firmware (windows)
@@ -73,10 +79,10 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH += ";" + [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-          just build && just doctor
+          just doctor && just build
 
-      # the pi builds chuds with the same apt tools
+      # the pi builds chuds with the same apt tools, and macos with the xcode command line tools
       - name: test chuds
-        if: matrix.os == 'ubuntu-24.04-arm'
+        if: matrix.os == 'ubuntu-24.04-arm' || runner.os == 'macOS'
         working-directory: .
         run: just cev-lib chuds test

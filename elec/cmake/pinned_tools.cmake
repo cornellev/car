@@ -1,24 +1,33 @@
 # download the pinned arm-gcc and picotool into elec/.tools on the first configure
 # the build uses these over anything on PATH, so a wrong arm-none-eabi-gcc can't be picked up
-# setting ELEC_SYSTEM_TOOLS in the environment (the nix shell does) uses the tools on PATH instead
+# a non-empty ELEC_SYSTEM_TOOLS in the environment (the nix shell sets it) uses the tools on PATH instead
+# the first configure reads it, and the build folder keeps that choice for every later shell or editor
+
+# a bump also changes the sha256 values below
+set(arm_release 15.3.rel1)
+# must match picotool_VERSION_REQUIRED in vendor/pico-sdk/tools/CMakeLists.txt
+set(picotool_release 2.3.0)
+# the pico-sdk-tools release that ships this picotool
+set(picotool_tag v2.3.0-1)
+# the version arm-gcc reports, such as 15.3 for 15.3.rel1
+string(REGEX MATCH "^[0-9]+\\.[0-9]+" arm_version ${arm_release})
 
 get_filename_component(tools_dir ${CMAKE_CURRENT_LIST_DIR}/../.tools ABSOLUTE)
 
-# a build folder keeps the compiler it was first configured with, so switching tools needs a clean
-foreach(compiler ${CMAKE_C_COMPILER} ${CMAKE_CXX_COMPILER})
-    string(FIND "${compiler}" "${tools_dir}/" at)
-    if((DEFINED ENV{ELEC_SYSTEM_TOOLS} AND at EQUAL 0) OR (NOT DEFINED ENV{ELEC_SYSTEM_TOOLS} AND NOT at EQUAL 0))
-        message(FATAL_ERROR "this build folder uses ${compiler}, which doesn't match the tools this "
-            "shell selects. Run `just clean`, then build again")
-    endif()
-endforeach()
+if("$ENV{ELEC_SYSTEM_TOOLS}" STREQUAL "")
+    set(system_tools OFF)
+else()
+    set(system_tools ON)
+endif()
+set(ELEC_SYSTEM_TOOLS ${system_tools} CACHE BOOL "use the arm-gcc and picotool on PATH instead of the pinned downloads")
 
-if(DEFINED ENV{ELEC_SYSTEM_TOOLS})
+if(ELEC_SYSTEM_TOOLS)
+    message(STATUS "using the arm-gcc and picotool on PATH (ELEC_SYSTEM_TOOLS)")
     return()
 endif()
 
-set(arm_url https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/15.3.rel1/arm-gnu-toolchain-15.3.rel1)
-set(picotool_url https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.3.0-1/picotool-2.3.0)
+set(arm_url https://gitlab.arm.com/api/v4/projects/tooling%2Fgnu-toolchains-for-arm/packages/generic/gnu-toolchain/${arm_release}/arm-gnu-toolchain-${arm_release})
+set(picotool_url https://github.com/raspberrypi/pico-sdk-tools/releases/download/${picotool_tag}/picotool-${picotool_release})
 
 cmake_host_system_information(RESULT cpu QUERY OS_PLATFORM)
 if(CMAKE_HOST_APPLE AND cpu STREQUAL "arm64")

@@ -113,13 +113,14 @@ TEST_CASE("a bus sends and receives a message without the caller touching a fram
 
 TEST_CASE("a bus builds a struct body message in one send call") {
     Bus<Loopback> bus;
-    const BodyState state{BodyState::kHeadlights};
+    BodyState state{};
+    state.set_headlights(true);
     CHECK(bus.send(MsgClass::Command, kBodyStateId, MsgType::Update, state).has_value());
     const auto r = bus.recv();
     REQUIRE(r.has_value());
     const auto back = body_as<BodyState>(*r);
     REQUIRE(back.has_value());
-    CHECK(back->bits == BodyState::kHeadlights);
+    CHECK(back->raw() == state.raw());
 }
 
 TEST_CASE("a quiet bus reports Empty") {
@@ -187,4 +188,20 @@ TEST_CASE("a bus forwards the controller status its transport reports") {
     CHECK(s.state == BusState::Passive);
     CHECK(s.tx_errors == 128);
     CHECK(s.rx_errors == 3);
+}
+
+TEST_CASE("bus forwards initialization retries and readiness") {
+    struct Retryable {
+        int attempts{};
+        TxResult send(const CanFrame&) { return {}; }
+        RxResult recv() { return std::unexpected(RxError::Empty); }
+        bool ready() const { return attempts >= 2; }
+        bool retry_init() { return ++attempts >= 2; }
+    };
+    Bus<Retryable> bus;
+    CHECK_FALSE(bus.ready());
+    CHECK_FALSE(bus.retry_init());
+    CHECK_FALSE(bus.ready());
+    CHECK(bus.retry_init());
+    CHECK(bus.ready());
 }

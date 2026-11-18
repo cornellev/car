@@ -2,5 +2,9 @@
   // let clangd ask the arm toolchain and host clang++ (chuds tests) for their system headers
   "clangd.arguments": ["--query-driver=**/arm-none-eabi-*,**/clang++"],
   // disable vscode intellisense because we use the clangd extension
-  "C_Cpp.intelliSenseEngine": "disabled"
+  "C_Cpp.intelliSenseEngine": "disabled",
+  // configure from CMakePresets.json, the same presets `just` uses
+  "cmake.useCMakePresets": "always",
+  // the first firmware configure downloads the arm compiler, so wait until asked
+  "cmake.configureOnOpen": false
 }

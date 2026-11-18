@@ -1,7 +1,6 @@
 {
-  // install the clangd extension
-  "recommendations": ["llvm-vs-code-extensions.vscode-clangd"],
+  // clangd for code, cmake-tools to pick a preset and build, flash, and test from vscode
+  "recommendations": ["llvm-vs-code-extensions.vscode-clangd", "ms-vscode.cmake-tools"],
   // we don't want microsoft's c/c++ extension
-  // we use `just` to handle cmake configuration, so cmake-tools would be confusing
-  "unwantedRecommendations": ["ms-vscode.cpptools", "ms-vscode.cmake-tools"]
+  "unwantedRecommendations": ["ms-vscode.cpptools"]
 }

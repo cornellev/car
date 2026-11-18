@@ -1,5 +1,3 @@
 # the demo uses SocketCAN (Linux)
 add_executable(chuds_demo chuds_demo.cpp)
-target_link_libraries(chuds_demo PRIVATE chuds_socketcan)
-target_compile_features(chuds_demo PRIVATE cxx_std_23)
-target_compile_options(chuds_demo PRIVATE -Wall -Wextra)
+target_link_libraries(chuds_demo PRIVATE chuds_socketcan chuds_warnings)

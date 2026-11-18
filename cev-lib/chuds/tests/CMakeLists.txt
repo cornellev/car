@@ -7,15 +7,13 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(doctest)
 
 add_executable(chuds-tests
-    main.cpp
     test_ids.cpp
     test_message.cpp
     test_transport.cpp
     test_bus.cpp
     test_catalog_format.cpp
 )
-target_link_libraries(chuds-tests PRIVATE chuds doctest::doctest)
-target_compile_options(chuds-tests PRIVATE -Wall -Wextra -Wconversion)
+target_link_libraries(chuds-tests PRIVATE chuds chuds_warnings doctest::doctest_with_main)
 
 # address and undefined-behavior sanitizers catch bad reads of bus bytes
 # linux only: sanitized binaries hang at startup under the nix clang on macOS
@@ -49,12 +47,8 @@ endforeach()
 # the socketcan adapter is Linux-only
 # test needs a CAN interface (skips without one)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    add_executable(chuds-socketcan-tests
-        main.cpp
-        test_socketcan.cpp
-    )
-    target_link_libraries(chuds-socketcan-tests PRIVATE chuds_socketcan doctest::doctest)
-    target_compile_options(chuds-socketcan-tests PRIVATE -Wall -Wextra)
+    add_executable(chuds-socketcan-tests test_socketcan.cpp)
+    target_link_libraries(chuds-socketcan-tests PRIVATE chuds_socketcan chuds_warnings doctest::doctest_with_main)
     target_compile_options(chuds-socketcan-tests PRIVATE ${CHUDS_SANITIZE})
     target_link_options(chuds-socketcan-tests PRIVATE ${CHUDS_SANITIZE})
     # the tests share one interface, so they must not run in parallel

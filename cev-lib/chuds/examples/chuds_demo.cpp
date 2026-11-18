@@ -4,7 +4,6 @@
 
 #include <chrono>
 #include <csignal>
-#include <cstdint>
 #include <cstdio>
 #include <string_view>
 #include <utility>
@@ -33,29 +32,27 @@ char read_key() {
     return 0;
 }
 
-void print_state(std::uint8_t bits) {
-    using chuds::BodyState;
-    std::printf(
-        "[body] headlights %s  left %s  right %s  horn %s  wiper %s\n",
-        (bits & BodyState::kHeadlights) ? "on" : "off",
-        (bits & BodyState::kLeftTurn) ? "on" : "off", (bits & BodyState::kRightTurn) ? "on" : "off",
-        (bits & BodyState::kHorn) ? "on" : "off", (bits & BodyState::kWiper) ? "on" : "off");
+void print_state(const chuds::BodyState& s) {
+    std::printf("[body] headlights %s  left %s  right %s  horn %s  wiper %s\n",
+                s.headlights() ? "on" : "off", s.left_turn() ? "on" : "off",
+                s.right_turn() ? "on" : "off", s.horn() ? "on" : "off", s.wiper() ? "on" : "off");
 }
 
-// apply one key to the body bits, false if the key does nothing
-bool apply_key(char key, std::uint8_t& bits) {
-    using chuds::BodyState;
-    // hazards are both turn signals
-    constexpr std::uint8_t both = BodyState::kLeftTurn | BodyState::kRightTurn;
+// apply one key to the body state, false if the key does nothing
+bool apply_key(char key, chuds::BodyState& s) {
     switch (key) {
-        case 'h': bits ^= BodyState::kHeadlights; return true;
-        case 'l': bits ^= BodyState::kLeftTurn; return true;
-        case 'r': bits ^= BodyState::kRightTurn; return true;
-        case 'z':
-            bits = static_cast<std::uint8_t>((bits & both) == both ? bits & ~both : bits | both);
+        case 'h': s.set_headlights(!s.headlights()); return true;
+        case 'l': s.set_left_turn(!s.left_turn()); return true;
+        case 'r': s.set_right_turn(!s.right_turn()); return true;
+        case 'z': {
+            // hazards toggle both turn signals together
+            const bool on = !(s.left_turn() && s.right_turn());
+            s.set_left_turn(on);
+            s.set_right_turn(on);
             return true;
-        case 'n': bits ^= BodyState::kHorn; return true;
-        case 'w': bits ^= BodyState::kWiper; return true;
+        }
+        case 'n': s.set_horn(!s.horn()); return true;
+        case 'w': s.set_wiper(!s.wiper()); return true;
         default: return false;
     }
 }
@@ -77,7 +74,7 @@ int run_live(chuds::Bus<chuds::SocketCanTransport>& bus) {
 
     std::printf("keys: h=headlights, l=left, r=right, z=hazards, n=horn, w=wiper, q=quit\n");
 
-    std::uint8_t bits{};
+    BodyState body{};
     bool blink_on{};
     auto next_send  = Clock::now();
     auto next_blink = Clock::now() + kBlinkHalf;
@@ -88,8 +85,8 @@ int run_live(chuds::Bus<chuds::SocketCanTransport>& bus) {
             break;
         }
         const auto now = Clock::now();
-        if (apply_key(key, bits)) {
-            print_state(bits);
+        if (apply_key(key, body)) {
+            print_state(body);
             next_send = now;
         }
         if (now >= next_blink) {
@@ -98,10 +95,8 @@ int run_live(chuds::Bus<chuds::SocketCanTransport>& bus) {
             next_send = now;
         }
         if (now >= next_send) {
-            const auto out =
-                static_cast<std::uint8_t>(blink_on ? bits | BodyState::kBlinkPhase : bits);
-            const BodyState state{out};
-            (void)bus.send(state);
+            body.set_blink_phase(blink_on);
+            (void)bus.send(body);
             next_send = now + kBodyResend;
         }
 
@@ -126,13 +121,14 @@ int run_live(chuds::Bus<chuds::SocketCanTransport>& bus) {
 
 // send a body state with headlights on
 int run_send(chuds::Bus<chuds::SocketCanTransport>& bus) {
-    const chuds::BodyState state{chuds::BodyState::kHeadlights};
+    chuds::BodyState state{};
+    state.set_headlights(true);
     const auto st = bus.send(state);
     if (!st) {
         std::fprintf(stderr, "send failed: %d\n", std::to_underlying(st.error()));
         return 1;
     }
-    std::printf("sent body state 0x%02x\n", state.bits);
+    std::printf("sent body state 0x%02x\n", state.raw());
     return 0;
 }
 

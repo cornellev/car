@@ -6,14 +6,23 @@ Diagnostics:
       - pico/.*
       - hardware/.*
 ---
-# only the firmware build compiles the driver and the mcp transport, so their compile commands live in elec/build
+# the firmware build compiles elec, the driver, the pico-sdk sources, and every chuds header
+# but the socketcan one, so those headers work without a host build (which windows lacks)
 If:
-  PathMatch: [cev-lib/RP2040_MCP251863_Driver/.*, cev-lib/chuds/mcp_transport\.hpp]
+  PathMatch: [elec/.*, cev-lib/RP2040_MCP251863_Driver/.*, cev-lib/chuds/include/chuds/.*, vendor/pico-sdk/.*]
+  PathExclude: cev-lib/chuds/include/chuds/socketcan_transport\.hpp
 CompileFlags:
-  CompilationDatabase: elec/build
+  CompilationDatabase: build/firmware
 ---
-# clangd borrows the driver's flags for this header, which lack chuds, so add it (relative to elec/build)
+# the host build compiles the chuds tests, examples, tools, and socketcan header
 If:
-  PathMatch: cev-lib/chuds/mcp_transport\.hpp
+  PathMatch: [cev-lib/chuds/tests/.*, cev-lib/chuds/examples/.*, cev-lib/chuds/tools/.*, cev-lib/chuds/include/chuds/socketcan_transport\.hpp]
 CompileFlags:
-  Add: [-I../../cev-lib]
+  CompilationDatabase: build/host
+---
+# clangd borrows another file's flags for a chuds header, which may lack chuds, so add it (relative to build/firmware)
+If:
+  PathMatch: cev-lib/chuds/include/chuds/.*
+  PathExclude: cev-lib/chuds/include/chuds/socketcan_transport\.hpp
+CompileFlags:
+  Add: [-I../../cev-lib/chuds/include]

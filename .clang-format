@@ -5,4 +5,4 @@ ColumnLimit: 100
 AlignConsecutiveAssignments: Consecutive
 AlignConsecutiveMacros: Consecutive
 AllowShortCaseLabelsOnASingleLine: true
-ReflowComments: Never
+ReflowComments: false

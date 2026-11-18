@@ -22,12 +22,12 @@ struct RxLog {
             return;
         }
         if (body_state) {
-            if (const auto b = chuds::body_as<chuds::BodyState>(m)) {
-                const int bits = b->bits & ~chuds::BodyState::kBlinkPhase;
-                if (bits == last_body) {
+            if (auto b = chuds::body_as<chuds::BodyState>(m)) {
+                b->set_blink_phase(false);
+                if (b->raw() == last_body) {
                     return;
                 }
-                last_body = bits;
+                last_body = b->raw();
             }
         }
         std::printf("rx ");

@@ -423,7 +423,9 @@ TEST_CASE("struct make_message and body_as are constexpr") {
 }
 
 TEST_CASE("body state goes out as a 3-byte broadcast command on 0x108") {
-    const BodyState s{static_cast<std::uint8_t>(BodyState::kHeadlights | BodyState::kLeftTurn)};
+    BodyState s{};
+    s.set_headlights(true);
+    s.set_left_turn(true);
     const auto m = make_message(MsgClass::Command, kBodyStateId, MsgType::Update, s);
     REQUIRE(m.has_value());
     const auto f = encode(*m);
