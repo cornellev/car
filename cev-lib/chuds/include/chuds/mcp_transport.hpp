@@ -40,8 +40,7 @@ class Mcp251863Transport {
     // rp2040 spi pins alternate between spi0 and spi1 in banks of 8
     explicit Mcp251863Transport(const McpPins& pins)
         : spi_(spi_get_instance(pins.sck / 8 % 2)),
-          // boards wire only nINT, and the transport never enables the driver's pin interrupts
-          mcp_(spi_, pins.cs, pins.stby, pins.nint, pins.nint, pins.nint),
+          mcp_(spi_, pins.cs, pins.stby, pins.nint),
           nint_(pins.nint) {
         spi_init(spi_, MCP251863_BAUD_RATE);
         spi_set_format(spi_, 8, SPI_CPOL_0, SPI_CPHA_0, SPI_MSB_FIRST);
@@ -76,18 +75,16 @@ class Mcp251863Transport {
         }
 
         // chuds frames are CAN-FD with bit-rate switch and a standard id
-        const Error err = mcp_.start_push_canfd(kTxFifo, f.id.raw(), f.data.data(), f.len, true);
-        if (err == Error::TxFifoFull) {
+        bool queued = false;
+        if (mcp_.send_canfd(kTxFifo, f.id.raw(), f.data.data(), f.len, true, &queued) == 0) {
+            return std::unexpected(TxError::Error);
+        }
+        if (!queued) {
             // a bus-off keeps the tx queue full, so rule it out first
             if (bus_off()) {
                 return std::unexpected(TxError::BusOff);
             }
             return std::unexpected(TxError::QueueFull);
-        }
-        if (err != Error::None || finish([this] { return mcp_.poll_push(); }) != Error::None ||
-            mcp_.request_send(kTxFifo) != Error::None || mcp_.clear_send() != Error::None) {
-            mcp_.abort();
-            return std::unexpected(TxError::Error);
         }
         return {};
     }
@@ -95,13 +92,12 @@ class Mcp251863Transport {
     // whether the chip initialized
     [[nodiscard]] bool ready() const { return init_ok_; }
 
-    // Retry a failed setup in place, reusing the driver's DMA resources.
+    // Retry a failed setup in place.
     // An initialized controller is left running.
     [[nodiscard]] bool retry_init() {
         if (init_ok_) return true;
-        init_ok_ = mcp_.init() == Error::None && mcp_.configureTxFifo(kTxFifo) == Error::None &&
-                   mcp_.configureRxFifo(kRxFifo, 0, 0, 0) == Error::None &&
-                   mcp_.begin() == Error::None;
+        init_ok_ = mcp_.init() == 1 && mcp_.configureTxFifo(kTxFifo) == 1 &&
+                   mcp_.configureRxFifo(kRxFifo, 0, 0, 0) == 1 && mcp_.begin() == 1;
         return init_ok_;
     }
 
@@ -111,12 +107,11 @@ class Mcp251863Transport {
         if (!init_ok_) {
             return {.state = BusState::Off};
         }
-        const Result<Status> r = mcp_.getStatus();
-        if (!r) {
+        BusErrorState s{};
+        if (mcp_.getBusErrors(&s) == 0) {
             return {.state = BusState::Off};
         }
-        const Status& s = r.value();
-        BusState state  = BusState::Active;
+        BusState state = BusState::Active;
         if (s.bus_off) {
             state = BusState::Off;
         } else if (s.tx_error_passive || s.rx_error_passive) {
@@ -130,19 +125,22 @@ class Mcp251863Transport {
             return std::unexpected(RxError::Error);
         }
         // nINT high means no enabled interrupt is pending, so skip the spi reads
-        // the driver also enables tx and error interrupts, so nINT is usually low anyway
         if (gpio_get(nint_)) {
             return std::unexpected(RxError::Empty);
         }
-        const Error err = mcp_.start_pop_canfd(kRxFifo);
-        if (err == Error::RxFifoEmpty) {
+        CanFdFrame cf{};
+        bool received = false;
+        if (mcp_.read_frame(kRxFifo, &cf, &received) == 0) {
+            return std::unexpected(RxError::Error);
+        }
+        if (!received) {
             // a dead bus is a fault, not a quiet one
             if (bus_off()) {
                 return std::unexpected(RxError::BusOff);
             }
 
-            const Result<FifoStatus> fifo = mcp_.getFIFOStatus(kRxFifo);
-            if (fifo && fifo.value().rx_overflow) {
+            FifoStatus fifo{};
+            if (mcp_.getFIFOStatus(kRxFifo, &fifo) == 1 && fifo.rx_overflow) {
                 // the flag is sticky and holds nINT low, so clear it once reported
                 (void)mcp_.clearRxOverflow(kRxFifo);
                 return std::unexpected(RxError::Overflow);
@@ -150,19 +148,10 @@ class Mcp251863Transport {
 
             return std::unexpected(RxError::Empty);
         }
-        if (err != Error::None || finish([this] { return mcp_.poll_pop(); }) != Error::None) {
-            mcp_.abort();
-            return std::unexpected(RxError::Error);
-        }
-        const Result<CanFdFrame> frame = mcp_.get_read_frame();
-        if (!frame) {
-            return std::unexpected(RxError::Error);
-        }
-        const CanFdFrame& cf = frame.value();
 
         // chuds is standard 11-bit CAN-FD only
-        // reject classic, remote, extended, out-of-range
-        if (cf.ide || cf.rtr || !cf.fdf || cf.id > kMaxStandardId.raw()) {
+        // reject classic (remote frames are classic), extended, out-of-range
+        if (cf.ide || !cf.fdf || cf.id > kMaxStandardId.raw()) {
             return std::unexpected(RxError::ForeignFrame);
         }
 
@@ -179,23 +168,9 @@ class Mcp251863Transport {
     static constexpr std::uint8_t kTxFifo = 0;
     static constexpr std::uint8_t kRxFifo = 1;
 
-    // one frame's dma takes under 100 us, so a millisecond means it stalled
-    static constexpr std::uint32_t kDmaTimeoutUs = 1000;
-
-    // waits out the dma transfer that poll reports on
-    template <typename Poll>
-    [[nodiscard]] Error finish(Poll poll) {
-        const absolute_time_t deadline = make_timeout_time_us(kDmaTimeoutUs);
-        Error err                      = poll();
-        while (err == Error::Busy && !time_reached(deadline)) {
-            err = poll();
-        }
-        return err;
-    }
-
     [[nodiscard]] bool bus_off() {
-        const Result<Status> s = mcp_.getStatus();
-        return s && s.value().bus_off;
+        BusErrorState s{};
+        return mcp_.getBusErrors(&s) == 1 && s.bus_off;
     }
 
     spi_inst_t* spi_;
