@@ -7,6 +7,7 @@
 #include <utility>
 
 // a macro, since it returns from the function that uses it
+// NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
 #define MCP_TRY(expr)           \
     do {                        \
         const Error e = (expr); \
@@ -448,6 +449,7 @@ Error MCP251863::readFifoUserAddress(uint16_t fifoPointAddr, size_t objectSize,
                                      uint16_t* messageAddr) {
     uint16_t ua = 0;
     // the register is little-endian like the rp2040, so its 2 bytes read straight into ua
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
     MCP_TRY(readAddr(fifoPointAddr, reinterpret_cast<uint8_t*>(&ua), 2));
     // RAM is 2 KB (0x400 - 0xBFF)
     // Thus buff value should be between 0x00 and 0x800 - objectSize

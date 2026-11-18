@@ -193,9 +193,9 @@ TEST_CASE("a bus forwards the controller status its transport reports") {
 TEST_CASE("bus forwards initialization retries and readiness") {
     struct Retryable {
         int attempts{};
-        TxResult send(const CanFrame&) { return {}; }
+        TxResult send(const CanFrame& /*frame*/) { return {}; }
         RxResult recv() { return std::unexpected(RxError::Empty); }
-        bool ready() const { return attempts >= 2; }
+        [[nodiscard]] bool ready() const { return attempts >= 2; }
         bool retry_init() { return ++attempts >= 2; }
     };
     Bus<Retryable> bus;
