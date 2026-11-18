@@ -239,13 +239,15 @@ class MasterShm {
                                        static_cast<float>(t->rpm_right)};
             cache_.steering_snap.ts = t->ts;  // front-node sample time only
             cache_.steering_snap.turn_angle =
-                t->steering <= 4095 ? t->steering * steer_scale_ + steer_offset_ : NANF;
+                t->steering <= 4095 ? static_cast<float>(t->steering) * steer_scale_ + steer_offset_
+                                    : NANF;
         } else if (auto t = chuds::catalog_body<chuds::back_aux::Telemetry>(m)) {
             ++back_rx_;
             cache_.rpm_snap_back = {t->ts, static_cast<float>(t->rpm_left),
                                     static_cast<float>(t->rpm_right)};
             cache_.steering_snap.brake_pressure =
-                t->brake <= 4095 ? t->brake * brake_scale_ + brake_offset_ : NANF;
+                t->brake <= 4095 ? static_cast<float>(t->brake) * brake_scale_ + brake_offset_
+                                 : NANF;
         } else if (auto t = chuds::catalog_body<chuds::joulemeter::Telemetry>(m)) {
             ++power_rx_;
             cache_.power_snap = {t->ts, t->current + current_offset_, t->voltage};
