@@ -8,7 +8,10 @@
 
 // a macro, since it returns from the function that uses it
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define MCP_TRY(expr) do { if (!(expr)) return 0; } while (0)
+#define MCP_TRY(expr)          \
+    do {                       \
+        if (!(expr)) return 0; \
+    } while (0)
 
 namespace {
 
@@ -81,13 +84,19 @@ uint32_t pack_data_bit_timing(BitTiming timing) {
 }
 
 int validate_bit_timing(const BitTiming& nominal, const BitTiming& data) {
-    if (nominal.tseg2 > 0x7F || nominal.sjw > 0x7F) { return 0; }
-    if (data.tseg1 > 0x1F || data.tseg2 > 0x0F || data.sjw > 0x0F) { return 0; }
+    if (nominal.tseg2 > 0x7F || nominal.sjw > 0x7F) {
+        return 0;
+    }
+    if (data.tseg1 > 0x1F || data.tseg2 > 0x0F || data.sjw > 0x0F) {
+        return 0;
+    }
     return 1;
 }
 
 uint32_t encode_tdc(bool enable, uint8_t offset) {
-    if (!enable) { return 0; }
+    if (!enable) {
+        return 0;
+    }
     // 10 at bits 17:16 for TDCMOD auto
     // TDCO at bits 13:8
     return (2UL << 16) | ((offset & 0x3F) << 8);
@@ -120,13 +129,16 @@ InitConfig default_init_config() {
 }
 
 uint32_t pack_id_word(const CanFdFrame& frame) {
-    if (frame.ide) { return ((frame.id >> 18) & 0x7FF) | ((frame.id & 0x3FFFF) << 11); }
+    if (frame.ide) {
+        return ((frame.id >> 18) & 0x7FF) | ((frame.id & 0x3FFFF) << 11);
+    }
     return frame.id & 0x7FF;
 }
 
 uint32_t pack_control_word(const CanFdFrame& frame) {
-    return ((uint32_t)frame.dlc & 0x0F) | (frame.ide ? (1UL << 4) : 0) | (frame.brs ? (1UL << 6) : 0) |
-           (frame.fdf ? (1UL << 7) : 0) | (frame.esi ? (1UL << 8) : 0);
+    return ((uint32_t)frame.dlc & 0x0F) | (frame.ide ? (1UL << 4) : 0) |
+           (frame.brs ? (1UL << 6) : 0) | (frame.fdf ? (1UL << 7) : 0) |
+           (frame.esi ? (1UL << 8) : 0);
 }
 
 void store_word(uint8_t* dst, uint32_t word) {
@@ -143,15 +155,23 @@ uint32_t load_word(const uint8_t* src) {
 
 int finalize_frame_dlc(CanFdFrame* frame) {
     auto dlc_opt = canfd_len_to_dlc(frame->len);
-    if (!dlc_opt) { return 0; }
+    if (!dlc_opt) {
+        return 0;
+    }
     frame->dlc = std::to_underlying(*dlc_opt);
     return 1;
 }
 
 int validate_tx_frame(const CanFdFrame& frame) {
-    if (!frame.fdf) { return 0; } // CAN not supported
-    if (frame.ide && (frame.id > 0x1FFFFFFF)) { return 0; }
-    if (!frame.ide && (frame.id > 0x7FF)) { return 0; }
+    if (!frame.fdf) {
+        return 0;
+    }  // CAN not supported
+    if (frame.ide && (frame.id > 0x1FFFFFFF)) {
+        return 0;
+    }
+    if (!frame.ide && (frame.id > 0x7FF)) {
+        return 0;
+    }
     return 1;
 }
 
@@ -196,20 +216,23 @@ int create_message_obj(uint8_t* dst, const CanFdFrame& frame, size_t* objectSize
     return 1;
 }
 
-uint16_t mcp_crc16(const uint8_t *data, size_t len, uint16_t crc = 0xFFFF) {
+uint16_t mcp_crc16(const uint8_t* data, size_t len, uint16_t crc = 0xFFFF) {
     for (size_t i = 0; i < len; i++) {
-        crc ^= (uint16_t)data[i] << 8; 
-        for (int b = 0; b < 8; b++) 
-            crc = (crc & 0x8000) ? (crc << 1) ^ 0x8005 : (crc << 1);
+        crc ^= (uint16_t)data[i] << 8;
+        for (int b = 0; b < 8; b++) crc = (crc & 0x8000) ? (crc << 1) ^ 0x8005 : (crc << 1);
     }
     return crc;
 }
 
 int crc_length_field(uint16_t addr, size_t len, uint8_t* n) {
     bool isRam = addr >= 0x400 && addr < 0xC00;
-    if (isRam && len % 4 != 0) { return 0; }
+    if (isRam && len % 4 != 0) {
+        return 0;
+    }
     size_t count = isRam ? len / 4 : len;
-    if (count > 255) { return 0; }
+    if (count > 255) {
+        return 0;
+    }
     *n = static_cast<uint8_t>(count);
     return 1;
 }
@@ -226,30 +249,31 @@ uint16_t fifo_ua_addr(uint8_t fifoNum) {
 
 BusErrorState decode_trec(uint32_t trec) {
     BusErrorState e{};
-    e.bus_off          = (trec & (1UL << 21)) != 0;  
-    e.tx_error_passive = (trec & (1UL << 20)) != 0;  
-    e.rx_error_passive = (trec & (1UL << 19)) != 0;  
-    e.tx_error_warning = (trec & (1UL << 18)) != 0;  
-    e.rx_error_warning = (trec & (1UL << 17)) != 0;  
-    e.error_warning    = (trec & (1UL << 16)) != 0; 
-    e.tx_error_count   = (trec >> 8) & 0xFF;         
-    e.rx_error_count   = trec & 0xFF;             
+    e.bus_off          = (trec & (1UL << 21)) != 0;
+    e.tx_error_passive = (trec & (1UL << 20)) != 0;
+    e.rx_error_passive = (trec & (1UL << 19)) != 0;
+    e.tx_error_warning = (trec & (1UL << 18)) != 0;
+    e.rx_error_warning = (trec & (1UL << 17)) != 0;
+    e.error_warning    = (trec & (1UL << 16)) != 0;
+    e.tx_error_count   = (trec >> 8) & 0xFF;
+    e.rx_error_count   = trec & 0xFF;
     return e;
 }
 
 }  // namespace
 
 MCP251863::MCP251863(spi_inst_t* ispi, uint iCSPin, uint iSTBYPin, uint iINTPin)
-    : spi_(ispi),
-      chipSelectPin_(iCSPin),
-      standbyPin_(iSTBYPin),
-      intPin_(iINTPin) { }
+    : spi_(ispi), chipSelectPin_(iCSPin), standbyPin_(iSTBYPin), intPin_(iINTPin) {}
 
 // Checks if a FIFO was actually configured and in the direction expected
 int MCP251863::checkFifo(uint8_t fifoNum, bool wantTx) const {
-    if (fifoNum > 30) { return 0; }
+    if (fifoNum > 30) {
+        return 0;
+    }
     const FifoInfo& info = fifoInfo[fifoNum];
-    if (!info.configured || info.isTx != wantTx) { return 0; }
+    if (!info.configured || info.isTx != wantTx) {
+        return 0;
+    }
     return 1;
 }
 
@@ -267,60 +291,61 @@ void MCP251863::csDeselect() const {
 
 int MCP251863::writeAddr(uint16_t startAddr, const uint8_t* data, size_t len) {
     MCP_TRY(writeAddrUnchecked(startAddr, data, len));
-    if (writeMode_ != WriteMode::WM_MCP_NORM) { return crcCheckPassed(); }
+    if (writeMode_ != WriteMode::WM_MCP_NORM) {
+        return crcCheckPassed();
+    }
     return 1;
 }
 
 int MCP251863::writeAddrUnchecked(uint16_t startAddr, const uint8_t* data, size_t len) {
-    if (data == nullptr && len > 0) { return 0; }
+    if (data == nullptr && len > 0) {
+        return 0;
+    }
 
     // form message CCCC-AAAAAAAAAAAA
     uint8_t message[3];
     message[1] = startAddr & 0xFF;
 
     if (writeMode_ == WriteMode::WM_MCP_NORM) {
+        message[0] = (std::to_underlying(Command::CMD_MCP_WRITA) << 4) | (startAddr >> 8);
 
-        message[0] = (std::to_underlying(Command::CMD_MCP_WRITA) << 4) | 
-                                        (startAddr >> 8);
-        
         csSelect();
         spi_write_blocking(spi_, message, 2);
         spi_write_blocking(spi_, data, len);
         csDeselect();
 
         return 1;
-    }
-    else if (writeMode_ == WriteMode::WM_MCP_CRC) {
-
-        message[0] = (std::to_underlying(Command::CMD_MCP_WRACR) << 4) | 
-                                        (startAddr >> 8);
+    } else if (writeMode_ == WriteMode::WM_MCP_CRC) {
+        message[0] = (std::to_underlying(Command::CMD_MCP_WRACR) << 4) | (startAddr >> 8);
 
         MCP_TRY(crc_length_field(startAddr, len, &message[2]));
-        
-        uint16_t crc = mcp_crc16(message, 3); 
-        crc = mcp_crc16(data, len, crc);
+
+        uint16_t crc        = mcp_crc16(message, 3);
+        crc                 = mcp_crc16(data, len, crc);
         uint8_t crcBytes[2] = {static_cast<uint8_t>(crc >> 8), static_cast<uint8_t>(crc)};
 
         csSelect();
         spi_write_blocking(spi_, message, 3);
         spi_write_blocking(spi_, data, len);
         spi_write_blocking(spi_, crcBytes, 2);
-        csDeselect(); 
+        csDeselect();
 
         return 1;
-    } else { return 0; } // WRITE_SAFE is unimplemented for now
+    } else {
+        return 0;
+    }  // WRITE_SAFE is unimplemented for now
 }
 
 int MCP251863::readAddr(uint16_t startAddr, uint8_t* dst, size_t len) {
-    if (dst == nullptr && len > 0) { return 0; }
+    if (dst == nullptr && len > 0) {
+        return 0;
+    }
 
     uint8_t message[3];
     message[1] = startAddr & 0xFF;
 
     if (readMode_ == ReadMode::RM_MCP_NORM) {
-
-        message[0] = (std::to_underlying(Command::CMD_MCP_READA) << 4) | 
-                                        (startAddr >> 8);
+        message[0] = (std::to_underlying(Command::CMD_MCP_READA) << 4) | (startAddr >> 8);
 
         csSelect();
         spi_write_blocking(spi_, message, 2);
@@ -330,19 +355,17 @@ int MCP251863::readAddr(uint16_t startAddr, uint8_t* dst, size_t len) {
         return 1;
 
     } else if (readMode_ == ReadMode::RM_MCP_CRC) {
+        message[0] = (std::to_underlying(Command::CMD_MCP_RDACR) << 4) | (startAddr >> 8);
 
-        message[0] = (std::to_underlying(Command::CMD_MCP_RDACR) << 4) | 
-                                        (startAddr >> 8);
-    
         MCP_TRY(crc_length_field(startAddr, len, &message[2]));
 
-        uint8_t  crcBytes[2];
+        uint8_t crcBytes[2];
         uint16_t headerCrc = mcp_crc16(message, 3);
 
         for (int i = 0; i < 3; i++) {
             csSelect();
             spi_write_blocking(spi_, message, 3);
-            spi_read_blocking(spi_, 0, dst, len); 
+            spi_read_blocking(spi_, 0, dst, len);
             spi_read_blocking(spi_, 0, crcBytes, 2);
             csDeselect();
 
@@ -354,14 +377,16 @@ int MCP251863::readAddr(uint16_t startAddr, uint8_t* dst, size_t len) {
         spiCrcErrors_++;
         return 0;
 
-    } else { return 0; }
+    } else {
+        return 0;
+    }
 }
 
 bool MCP251863::crcCheckPassed() {
-    uint8_t buff = 0;
+    uint8_t buff      = 0;
     uint16_t crc_addr = std::to_underlying(RegisterAddress::REG_MCP_CRC);
     MCP_TRY(readAddr(crc_addr + 2, &buff, 1));
-    if ((buff & 0b00000011) != 0) { // FERRIF, CRCERRIF
+    if ((buff & 0b00000011) != 0) {  // FERRIF, CRCERRIF
         spiCrcErrors_++;
         uint8_t zero = 0;
         (void)writeAddrUnchecked(crc_addr + 2, &zero, 1);
@@ -371,12 +396,12 @@ bool MCP251863::crcCheckPassed() {
 }
 
 bool MCP251863::eccCheckPassed() {
-    uint8_t buff = 0;
+    uint8_t buff      = 0;
     uint16_t ecc_addr = std::to_underlying(RegisterAddress::REG_MCP_ECCSTAT);
     MCP_TRY(readAddr(ecc_addr, &buff, 1));
     if ((buff & 0b00000100) != 0) {  // DEDIF
         eccDoubleErrors_++;
-        const uint8_t zero = 0;  
+        const uint8_t zero = 0;
         (void)writeAddr(ecc_addr, &zero, 1);
         return false;
     }
@@ -409,7 +434,9 @@ int MCP251863::pollRegisterBit(uint16_t addr, uint8_t mask, bool wantSet) {
     for (int i = 0; i < 100; i++) {
         uint8_t buff = 0;
         MCP_TRY(readAddr(addr, &buff, 1));
-        if (((buff & mask) != 0) == wantSet) { return 1; }
+        if (((buff & mask) != 0) == wantSet) {
+            return 1;
+        }
         sleep_us(1000);
     }
     return 0;
@@ -426,7 +453,9 @@ int MCP251863::waitForOpMode(ControllerMode target) {
     for (int i = 0; i < 100; i++) {
         uint8_t mode = 0;
         MCP_TRY(readOpMode(&mode));
-        if (mode == std::to_underlying(target)) { return 1; }
+        if (mode == std::to_underlying(target)) {
+            return 1;
+        }
         sleep_us(1000);
     }
     return 0;
@@ -446,8 +475,12 @@ int MCP251863::init(const InitConfig& config) {
     MCP_TRY(validate_bit_timing(config.nominalBitTiming, config.dataBitTiming));
 
     // unsupported for now
-    if (config.rxTimestampEnable) { return 0; }
-    if (config.enablePll || config.sclkDiv2) { return 0; }
+    if (config.rxTimestampEnable) {
+        return 0;
+    }
+    if (config.enablePll || config.sclkDiv2) {
+        return 0;
+    }
 
     config_ = config;
 
@@ -474,7 +507,6 @@ int MCP251863::init(const InitConfig& config) {
 }
 
 int MCP251863::configureDevice(const InitConfig& config) {
-
     // set ABAT: abort all pending transmissions
     (void)updateByte(std::to_underlying(RegisterAddress::REG_MCP_C1CON) + 3, 1 << 3, 1 << 3);
     (void)setControllerMode(ControllerMode::CMODE_MCP_CONF);
@@ -493,13 +525,16 @@ int MCP251863::configureDevice(const InitConfig& config) {
     // read the bit timing back to prove MCP answered / isn't disconnected
     uint32_t nbtcfg = 0;
     MCP_TRY(readReg(std::to_underlying(RegisterAddress::REG_MCP_C1NBTCFG), &nbtcfg));
-    if (nbtcfg != pack_nominal_bit_timing(config.nominalBitTiming)) { return 0; }
+    if (nbtcfg != pack_nominal_bit_timing(config.nominalBitTiming)) {
+        return 0;
+    }
 
     MCP_TRY(writeReg(std::to_underlying(RegisterAddress::REG_MCP_C1TDC),
                      encode_tdc(config.enableTdc, config.tdcOffset)));
 
     uint8_t eccon = 0x01;
-    MCP_TRY(writeAddr(std::to_underlying(RegisterAddress::REG_MCP_ECCCON), &eccon, 1)); // enable ECC
+    MCP_TRY(
+        writeAddr(std::to_underlying(RegisterAddress::REG_MCP_ECCCON), &eccon, 1));  // enable ECC
 
     // clear RAM after enabling ECC
     const uint8_t zeros[64] = {0};
@@ -508,15 +543,17 @@ int MCP251863::configureDevice(const InitConfig& config) {
     }
 
     // INT pin goes low during a general RX and RX overflow event
-    const uint32_t interrupts = std::to_underlying(InterruptEnable::INT_EN_MCP_RXIE) |   
-                                std::to_underlying(InterruptEnable::INT_EN_MCP_RXOVIE);   
-                        
+    const uint32_t interrupts = std::to_underlying(InterruptEnable::INT_EN_MCP_RXIE) |
+                                std::to_underlying(InterruptEnable::INT_EN_MCP_RXOVIE);
+
     // sets enables and clears any stale flags
     return writeReg(std::to_underlying(RegisterAddress::REG_MCP_C1INT), interrupts);
 }
 
 int MCP251863::begin() {
-    if (state_ != DriverState::Configuring) { return 0; }
+    if (state_ != DriverState::Configuring) {
+        return 0;
+    }
 
     setTransceiverMode(TransceiverMode::TMODE_MCP_NORM);
     if (!setControllerMode(ControllerMode::CMODE_MCP_CFD_NORM) ||
@@ -537,7 +574,9 @@ int MCP251863::setBitTiming(BitTiming nominalTiming, BitTiming dataTiming) {
 }
 
 int MCP251863::reset() {
-    for (FifoInfo& f : fifoInfo) { f = FifoInfo{}; }
+    for (FifoInfo& f : fifoInfo) {
+        f = FifoInfo{};
+    }
     state_ = DriverState::Configuring;
 
     const uint8_t message[2] = {0, 0};
@@ -551,8 +590,10 @@ int MCP251863::reset() {
 
 int MCP251863::fifoRamFits(uint8_t fifoNum, bool isTx) const {
     // each message is an 8-byte header plus the payload
-    const size_t txFifoBytes = config_.txFifoDepth * (8 + fifo_plsize_to_len(config_.txPayloadSize));
-    const size_t rxFifoBytes = config_.rxFifoDepth * (8 + fifo_plsize_to_len(config_.rxPayloadSize));
+    const size_t txFifoBytes =
+        config_.txFifoDepth * (8 + fifo_plsize_to_len(config_.txPayloadSize));
+    const size_t rxFifoBytes =
+        config_.rxFifoDepth * (8 + fifo_plsize_to_len(config_.rxPayloadSize));
     const size_t unusedFifoBytes = 8 + 8;  // reset size: 1 message, 8-byte payload
 
     size_t total  = 0;  // RAM used by FIFO1 up to FIFO i
@@ -565,14 +606,20 @@ int MCP251863::fifoRamFits(uint8_t fifoNum, bool isTx) const {
             inUse = true;
             tx    = isTx;
         }
-        if (!inUse)  { total += unusedFifoBytes; } 
-        else if (tx) { total += txFifoBytes; } 
-        else         { total += rxFifoBytes; }
+        if (!inUse) {
+            total += unusedFifoBytes;
+        } else if (tx) {
+            total += txFifoBytes;
+        } else {
+            total += rxFifoBytes;
+        }
 
-        if (inUse) { needed = total; }
+        if (inUse) {
+            needed = total;
+        }
     }
 
-    return needed <= 2048; // 2 KB RAM
+    return needed <= 2048;  // 2 KB RAM
 }
 
 bool MCP251863::filterInUse(uint8_t fltNum, uint8_t exceptFifo) const {
@@ -590,31 +637,46 @@ int MCP251863::releaseFifo(uint8_t fifoNum) {
     const FifoInfo& f = fifoInfo[fifoNum];
     if (f.configured && !f.isTx) {
         MCP_TRY(disableFilter(f.rxFltNum));
-        if (f.rxFltNum2 != NoFilter) { MCP_TRY(disableFilter(f.rxFltNum2)); }
+        if (f.rxFltNum2 != NoFilter) {
+            MCP_TRY(disableFilter(f.rxFltNum2));
+        }
     }
     fifoInfo[fifoNum] = FifoInfo{};
     return 1;
 }
 
 int MCP251863::configureTxFifo(uint8_t fifoNum, uint8_t prioNum) {
-    if (state_ != DriverState::Configuring) { return 0; }
-    if (fifoNum > 30 || prioNum > 31) { return 0; }
-    if (!fifoRamFits(fifoNum, true)) { return 0; }
+    if (state_ != DriverState::Configuring) {
+        return 0;
+    }
+    if (fifoNum > 30 || prioNum > 31) {
+        return 0;
+    }
+    if (!fifoRamFits(fifoNum, true)) {
+        return 0;
+    }
     MCP_TRY(releaseFifo(fifoNum));
     MCP_TRY(initGeneralPurposeFifo(fifoNum, FifoMode::FIFO_MODE_MCP_TX, config_.txPayloadSize,
-                                   config_.txFifoDepth, prioNum,
-                                   TxRetransmitMode::TXRET_MCP_UNLIM, 0)); // no interrupts for TX
+                                   config_.txFifoDepth, prioNum, TxRetransmitMode::TXRET_MCP_UNLIM,
+                                   0));  // no interrupts for TX
     fifoInfo[fifoNum].configured = true;
     fifoInfo[fifoNum].isTx       = true;
     return 1;
 }
 
-int MCP251863::configureRxFifo(uint8_t fifoNum, uint8_t fltNum, uint16_t canSID,
-                                 uint16_t sidMask) {
-    if (state_ != DriverState::Configuring) { return 0; }
-    if (fifoNum > 30 || fltNum > 31 || canSID > 0x7FF || sidMask > 0x7FF) { return 0; }
-    if (!fifoRamFits(fifoNum, false)) { return 0; }
-    if (filterInUse(fltNum, fifoNum)) { return 0; }
+int MCP251863::configureRxFifo(uint8_t fifoNum, uint8_t fltNum, uint16_t canSID, uint16_t sidMask) {
+    if (state_ != DriverState::Configuring) {
+        return 0;
+    }
+    if (fifoNum > 30 || fltNum > 31 || canSID > 0x7FF || sidMask > 0x7FF) {
+        return 0;
+    }
+    if (!fifoRamFits(fifoNum, false)) {
+        return 0;
+    }
+    if (filterInUse(fltNum, fifoNum)) {
+        return 0;
+    }
     MCP_TRY(releaseFifo(fifoNum));
     // enable Not Empty and Overflow interrupts for this FIFO
     const uint8_t rxFlags = std::to_underlying(FifoInterruptFlag::FIFO_INT_MCP_NFNE) |
@@ -636,12 +698,16 @@ int MCP251863::configureRxFifo(uint8_t fifoNum, uint16_t canSID) {
 }
 
 int MCP251863::configureRxFifoTwoIds(uint8_t fifoNum, uint16_t canSID1, uint16_t canSID2) {
-    if (fifoNum > 30 || canSID2 > 0x7FF) { return 0; }
+    if (fifoNum > 30 || canSID2 > 0x7FF) {
+        return 0;
+    }
     const uint8_t fltNum2 = 31 - fifoNum;
-    if (filterInUse(fltNum2, fifoNum)) { return 0; }
+    if (filterInUse(fltNum2, fifoNum)) {
+        return 0;
+    }
     MCP_TRY(configureRxFifo(fifoNum, fifoNum, canSID1));
     if (!initFilter(fltNum2, fifoNum, canSID2, 0x7FF)) {
-        (void)releaseFifo(fifoNum); 
+        (void)releaseFifo(fifoNum);
         return 0;
     }
     fifoInfo[fifoNum].rxFltNum2 = fltNum2;
@@ -649,8 +715,8 @@ int MCP251863::configureRxFifoTwoIds(uint8_t fifoNum, uint16_t canSID1, uint16_t
 }
 
 int MCP251863::initGeneralPurposeFifo(uint8_t fifoNum, FifoMode fifoMode, FifoPayloadSize plSize,
-                                        uint8_t fSize, uint8_t prioNum, TxRetransmitMode retranMode,
-                                        uint8_t intFlags) {
+                                      uint8_t fSize, uint8_t prioNum, TxRetransmitMode retranMode,
+                                      uint8_t intFlags) {
     uint8_t buff[4];
     const uint16_t addr = fifo_con_addr(fifoNum);
 
@@ -664,8 +730,12 @@ int MCP251863::initGeneralPurposeFifo(uint8_t fifoNum, FifoMode fifoMode, FifoPa
 }
 
 int MCP251863::disableFifo(uint8_t fifoNum) {
-    if (fifoNum > 30) { return 0; }
-    if (!fifoInfo[fifoNum].configured) { return 0; }
+    if (fifoNum > 30) {
+        return 0;
+    }
+    if (!fifoInfo[fifoNum].configured) {
+        return 0;
+    }
     const uint16_t addr = fifo_con_addr(fifoNum);
 
     const bool wasTx = fifoInfo[fifoNum].isTx;
@@ -690,7 +760,7 @@ int MCP251863::disableFifo(uint8_t fifoNum) {
 }
 
 int MCP251863::disableFilter(uint8_t fltNum) {
-    const uint8_t off = 0x00;  
+    const uint8_t off = 0x00;
     return writeAddr(std::to_underlying(RegisterAddress::REG_MCP_C1FLTCONx) + fltNum, &off, 1);
 }
 
@@ -728,20 +798,30 @@ int MCP251863::readFifoUserAddress(uint8_t fifoNum, size_t slotSize, uint16_t* m
     uint8_t buff[2] = {0};
     MCP_TRY(readAddr(fifo_ua_addr(fifoNum), buff, 2));
     const uint16_t ua = static_cast<uint16_t>(buff[0] | (buff[1] << 8));
-    if ((ua & 0x3) != 0 || ua + slotSize > 0x800) { return 0; }
+    if ((ua & 0x3) != 0 || ua + slotSize > 0x800) {
+        return 0;
+    }
     *messageAddr = ua + 0x400;
     return 1;
 }
 
 int MCP251863::send_canfd(uint8_t fifoNum, uint32_t id, const uint8_t* data, size_t len, bool brs,
                           bool* queued) {
-    if (queued == nullptr) { return 0; }
+    if (queued == nullptr) {
+        return 0;
+    }
     *queued = false;
-    if (state_ != DriverState::Running) { return 0; }
+    if (state_ != DriverState::Running) {
+        return 0;
+    }
     MCP_TRY(checkFifo(fifoNum, true));
     const size_t slotPayload = fifo_plsize_to_len(config_.txPayloadSize);
-    if (len > slotPayload) { return 0; }
-    if (len > 0 && data == nullptr) { return 0; }
+    if (len > slotPayload) {
+        return 0;
+    }
+    if (len > 0 && data == nullptr) {
+        return 0;
+    }
 
     // double error here means the frame transmitted from earlier was corrupted
     // that frame has already been sent so just update the ecc counter
@@ -753,7 +833,9 @@ int MCP251863::send_canfd(uint8_t fifoNum, uint32_t id, const uint8_t* data, siz
     frame.fdf = true;
     frame.brs = brs;
     frame.len = static_cast<uint8_t>(len);
-    if (len > 0) { memcpy(frame.data, data, len); }
+    if (len > 0) {
+        memcpy(frame.data, data, len);
+    }
 
     uint8_t message[72];
     size_t objectSize = 0;
@@ -762,7 +844,9 @@ int MCP251863::send_canfd(uint8_t fifoNum, uint32_t id, const uint8_t* data, siz
     // check if TX FIFO is full
     uint8_t stat = 0;
     MCP_TRY(readAddr(fifo_sta_addr(fifoNum), &stat, 1));
-    if ((stat & 0x01) == 0) { return 1; }  // TFNRFNIF = 0: FIFO full, *queued stays false
+    if ((stat & 0x01) == 0) {
+        return 1;
+    }  // TFNRFNIF = 0: FIFO full, *queued stays false
 
     // get message address + write frame to that address
     uint16_t messageAddr = 0;
@@ -772,24 +856,30 @@ int MCP251863::send_canfd(uint8_t fifoNum, uint32_t id, const uint8_t* data, siz
     // increment TX FIFO pointer
     const uint8_t uincTxreq = 0b00000011;
     MCP_TRY(writeAddr(fifo_con_addr(fifoNum) + 1, &uincTxreq, 1));
-    *queued = true; // message was successfully queued
+    *queued = true;  // message was successfully queued
     return 1;
 }
 
 int MCP251863::read_frame(uint8_t fifoNum, CanFdFrame* frame, bool* received) {
-    if (frame == nullptr || received == nullptr) { return 0; }
+    if (frame == nullptr || received == nullptr) {
+        return 0;
+    }
     *received = false;
-    if (state_ != DriverState::Running) { return 0; }
+    if (state_ != DriverState::Running) {
+        return 0;
+    }
     MCP_TRY(checkFifo(fifoNum, false));
 
     // check if RX FIFO is empty
     uint8_t stat = 0;
     MCP_TRY(readAddr(fifo_sta_addr(fifoNum), &stat, 1));
-    if ((stat & 0x01) == 0) { return 1; }  // TFNRFNIF = 0: FIFO empty, *received stays false
+    if ((stat & 0x01) == 0) {
+        return 1;
+    }  // TFNRFNIF = 0: FIFO empty, *received stays false
 
     // get message's address
     const size_t slotPayload = fifo_plsize_to_len(config_.rxPayloadSize);
-    uint16_t messageAddr = 0;
+    uint16_t messageAddr     = 0;
     MCP_TRY(readFifoUserAddress(fifoNum, 8 + slotPayload, &messageAddr));
 
     // read and decode RX message's header
@@ -805,20 +895,26 @@ int MCP251863::read_frame(uint8_t fifoNum, CanFdFrame* frame, bool* received) {
 
     // round up read length to multiple of four (words)
     const size_t readLen = (rx.len + 3) & ~size_t{3};
-    if (readLen > 0) { MCP_TRY(readAddr(messageAddr + 8, rx.data, readLen)); }
+    if (readLen > 0) {
+        MCP_TRY(readAddr(messageAddr + 8, rx.data, readLen));
+    }
 
     // double error means the frame just read is corrupted
     const bool eccOk = eccCheckPassed();
 
     MCP_TRY(writeAddr(fifo_con_addr(fifoNum) + 1, &uinc, 1));
-    if (!eccOk) { return 0; }  // drop the frame
+    if (!eccOk) {
+        return 0;
+    }  // drop the frame
     *frame    = rx;
     *received = true;
     return 1;
 }
 
 int MCP251863::getFIFOStatus(uint8_t fifoNum, FifoStatus* status) {
-    if (status == nullptr || fifoNum > 30) { return 0; }
+    if (status == nullptr || fifoNum > 30) {
+        return 0;
+    }
     uint32_t reg = 0;
     MCP_TRY(readReg(fifo_sta_addr(fifoNum), &reg));
 
@@ -832,7 +928,7 @@ int MCP251863::getFIFOStatus(uint8_t fifoNum, FifoStatus* status) {
     s.empty_or_full           = (reg & (1UL << 2)) != 0;
     s.half_empty_or_half_full = (reg & (1UL << 1)) != 0;
     s.not_full_or_not_empty   = (reg & 1UL) != 0;
-    *status = s;
+    *status                   = s;
     return 1;
 }
 
@@ -844,15 +940,19 @@ int MCP251863::clearRxOverflow(uint8_t fifoNum) {
 
 // reads only C1TREC for bus-off or error-passive checks (avoid reading 9 reg all the time)
 int MCP251863::getBusErrors(BusErrorState* errors) {
-    if (errors == nullptr) { return 0; }
+    if (errors == nullptr) {
+        return 0;
+    }
     uint32_t trec = 0;
     MCP_TRY(readReg(std::to_underlying(RegisterAddress::REG_MCP_C1TREC), &trec));
     *errors = decode_trec(trec);
     return 1;
-} 
+}
 
 int MCP251863::getStatus(Status* status) {
-    if (status == nullptr) { return 0; }
+    if (status == nullptr) {
+        return 0;
+    }
     Status s{};
     uint32_t trec = 0;
     MCP_TRY(readReg(std::to_underlying(RegisterAddress::REG_MCP_C1INT), &s.interrupt_flags));
@@ -864,16 +964,16 @@ int MCP251863::getStatus(Status* status) {
     MCP_TRY(readReg(std::to_underlying(RegisterAddress::REG_MCP_C1BDIAGx), &s.bdiag0));
     MCP_TRY(readReg(std::to_underlying(RegisterAddress::REG_MCP_C1BDIAGx) + 4, &s.bdiag1));
     MCP_TRY(readReg(std::to_underlying(RegisterAddress::REG_MCP_CRC), &s.crc));
-    s.errors = decode_trec(trec);
+    s.errors            = decode_trec(trec);
     s.ecc_double_errors = eccDoubleErrors_;
     s.spi_crc_errors    = spiCrcErrors_;
-    *status = s;
+    *status             = s;
     return 1;
 }
 
 int MCP251863::setControllerMode(ControllerMode contMode) {
     const uint16_t addr = std::to_underlying(RegisterAddress::REG_MCP_C1CON);
-    uint8_t current = 0;
+    uint8_t current     = 0;
     MCP_TRY(readOpMode(&current));
     if (current != std::to_underlying(ControllerMode::CMODE_MCP_CONF)) {
         MCP_TRY(
@@ -899,7 +999,9 @@ int MCP251863::pendingRxFifos(uint32_t* rxMask, uint32_t* overflowMask) {
 }
 
 int MCP251863::setPinMode(IoPin pin, IoMode mode) {
-    if (std::to_underlying(pin) > 1) { return 0; }
+    if (std::to_underlying(pin) > 1) {
+        return 0;
+    }
     const uint8_t bit = static_cast<uint8_t>(1U << std::to_underlying(pin));
     const auto clear  = static_cast<uint8_t>(~bit);
 

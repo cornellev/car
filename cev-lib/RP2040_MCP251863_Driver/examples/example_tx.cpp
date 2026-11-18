@@ -49,7 +49,7 @@ int main() {
 
     uint8_t* data = nullptr;
     uint32_t id   = 0;
-    size_t len = sizeof(data0);
+    size_t len    = sizeof(data0);
 
     for (;;) {
         if (count % 3 == 0) {
@@ -69,7 +69,7 @@ int main() {
         bool queued = false;
         if (!mcp.send_canfd(0, id, data, len, true, &queued)) {
             printf("Send failed.\n");
-        } else if (!queued) {  
+        } else if (!queued) {
             printf("TX FIFO was full.\n");
         }
 

@@ -12,9 +12,9 @@
 #include "pico/stdlib.h"
 
 // Constants and magic numbers
-const uint MCP251863_BAUD_RATE = 16000000;
+const uint MCP251863_BAUD_RATE   = 16000000;
 const uint MCP251863_MAX_PAYLOAD = 64;
-const uint MCP251863_CLOCK_HZ = 40000000;
+const uint MCP251863_CLOCK_HZ    = 40000000;
 
 // Enums for various device modes/configs
 
@@ -161,7 +161,12 @@ enum class IoPin : uint8_t { IO_MCP_INT0 = 0, IO_MCP_INT1 = 1 };
 
 enum class IoMode : uint8_t { IOMODE_MCP_INT = 0, IOMODE_MCP_GPIO_OUT = 1, IOMODE_MCP_GPIO_IN = 2 };
 
-enum class MessageType : uint8_t { CAN_BASE_MCP = 0, CAN_FD_BASE_MCP = 1, CAN_EXT = 2, CAN_FD_EXT = 3 };
+enum class MessageType : uint8_t {
+    CAN_BASE_MCP    = 0,
+    CAN_FD_BASE_MCP = 1,
+    CAN_EXT         = 2,
+    CAN_FD_EXT      = 3
+};
 
 //   Uninitialized: before init(), or after it failed; FIFO setup and begin() are refused
 //   Configuring:   init() succeeded (or reset() ran), chip in config mode, FIFO setup allowed
@@ -235,8 +240,8 @@ struct Status {
     uint32_t bdiag0;  // CiBDIAG0 - bus diagnostic register 0
     uint32_t bdiag1;  // CiBDIAG1 - bus diagnostic register 1
     uint32_t crc;
-    uint32_t spi_crc_errors;      
-    uint32_t ecc_double_errors;  
+    uint32_t spi_crc_errors;
+    uint32_t ecc_double_errors;
 };
 
 struct FifoStatus {
@@ -264,7 +269,7 @@ class MCP251863 {
     spi_inst_t* spi_;
     uint chipSelectPin_;
     uint standbyPin_;
-    uint intPin_; // int0Pin_, int1Pin_ unused
+    uint intPin_;  // int0Pin_, int1Pin_ unused
     WriteMode writeMode_ = WriteMode::WM_MCP_NORM;
     ReadMode readMode_   = ReadMode::RM_MCP_NORM;
 
@@ -272,8 +277,8 @@ class MCP251863 {
 
     DriverState state_ = DriverState::Uninitialized;
 
-    uint32_t spiCrcErrors_    = 0; // counted by crcCheckPassed, reported in Status
-    uint32_t eccDoubleErrors_ = 0; // counted by eccCheckPassed, reported in Status
+    uint32_t spiCrcErrors_    = 0;  // counted by crcCheckPassed, reported in Status
+    uint32_t eccDoubleErrors_ = 0;  // counted by eccCheckPassed, reported in Status
 
     FifoInfo fifoInfo[31];
 
@@ -292,12 +297,12 @@ class MCP251863 {
     int updateByte(uint16_t addr, uint8_t field, uint8_t value);
     int checkFifo(uint8_t fifoNum, bool wantTx) const;
     int readFifoUserAddress(uint8_t fifoNum, size_t slotSize, uint16_t* messageAddr);
-    
+
     int configureDevice(const InitConfig& config);
 
     int initGeneralPurposeFifo(uint8_t fifoNum, FifoMode fifoMode, FifoPayloadSize plSize,
-                                 uint8_t fSize, uint8_t prioNum, TxRetransmitMode retranMode,
-                                 uint8_t intFlags);
+                               uint8_t fSize, uint8_t prioNum, TxRetransmitMode retranMode,
+                               uint8_t intFlags);
 
     // checks whether configuring fifoNum still fits the 2 KB message RAM.
     int fifoRamFits(uint8_t fifoNum, bool isTx) const;
@@ -353,8 +358,7 @@ class MCP251863 {
     // fifoNum range: 0 - 30, fltNum range: 0 - 31
     // higher number = higher priority to send msgs onto bus
     int configureTxFifo(uint8_t fifoNum, uint8_t prioNum = 0);
-    int configureRxFifo(uint8_t fifoNum, uint8_t fltNum, uint16_t canSID,
-                          uint16_t sidMask = 0x7FF);
+    int configureRxFifo(uint8_t fifoNum, uint8_t fltNum, uint16_t canSID, uint16_t sidMask = 0x7FF);
     // suscribes the RX FIFO to an ID
     // if 2 RX FIFOs suscribe to the same ID, the FIFO with
     // the lower fitNum has higher priority (msg would be passed
@@ -374,7 +378,7 @@ class MCP251863 {
     int begin();
 
     // queue a CAN FD frame on a TX FIFO and request it be sent
-    // returns 0 when DriverState != Running, invalid FIFO, SPI error, or the frame is 
+    // returns 0 when DriverState != Running, invalid FIFO, SPI error, or the frame is
     // longer than the FIFO's payload size. Returns 1 otherwise
     // if FIFO was full, *queued is false and nothing is written to FIFO
     int send_canfd(uint8_t fifoNum, uint32_t id, const uint8_t* data, size_t len, bool brs,

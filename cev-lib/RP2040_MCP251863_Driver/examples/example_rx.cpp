@@ -12,8 +12,9 @@ static constexpr uint STBY_PIN = 24;
 static constexpr uint INT_PIN  = 25;
 
 static void print_frame(const CanFdFrame& frame) {
-    printf("id=0x%03X  len=%d  fdf=%d  brs=%d  ide=%d  esi=%d  filter=%d  data=", (unsigned)frame.id,
-           frame.len, frame.fdf, frame.brs, frame.ide, frame.esi, frame.filter_hit);
+    printf(
+        "id=0x%03X  len=%d  fdf=%d  brs=%d  ide=%d  esi=%d  filter=%d  data=", (unsigned)frame.id,
+        frame.len, frame.fdf, frame.brs, frame.ide, frame.esi, frame.filter_hit);
     for (int i = 0; i < frame.len; i++) {
         printf("%02X ", frame.data[i]);
     }
@@ -57,8 +58,8 @@ int main() {
         return 1;
     }
 
-    int count = 0;
-    int lastPrinted = -1;  
+    int count       = 0;
+    int lastPrinted = -1;
 
     for (;;) {
         CanFdFrame frame{};
@@ -80,13 +81,13 @@ int main() {
 
                 if ((rxMask & (1u << fifo)) != 0) {
                     if (!mcp.read_frame(fifo, &frame, &received)) {
-                        printf("FIFO %u: read_frame failed.\n", fifo);  
+                        printf("FIFO %u: read_frame failed.\n", fifo);
                         return 1;
                     } else if (!received) {
-                        printf("FIFO %u: RX FIFO was empty.\n", fifo);  
+                        printf("FIFO %u: RX FIFO was empty.\n", fifo);
                         return 1;
                     }
-                    printf("FIFO %u: [%d] ", fifo, count);  
+                    printf("FIFO %u: [%d] ", fifo, count);
                     print_frame(frame);
                     count++;
                 }
