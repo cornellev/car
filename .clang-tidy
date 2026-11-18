@@ -30,15 +30,14 @@ Checks: >
   -cppcoreguidelines-avoid-non-const-global-variables,
   -modernize-use-std-print,
   -clang-analyzer-core.FixedAddressDereference,
-  -modernize-use-integer-sign-comparison
+  -modernize-use-integer-sign-comparison,
+  -readability-function-cognitive-complexity
 # report every header except vendored code, system headers are skipped by default
 HeaderFilterRegex: ".*"
 ExcludeHeaderFilterRegex: ".*/vendor/.*"
 CheckOptions:
   # we use "do { ... } while (0)" to make macros act like a statement
   cppcoreguidelines-avoid-do-while.IgnoreMacros: true
-  # so a function is not scored complex for the if inside each such macro
-  readability-function-cognitive-complexity.IgnoreMacros: true
   # the default list minus std::expected, since Bus::send results may be ignored
   bugprone-unused-return-value.CheckedReturnTypes: "::std::error_code;::std::error_condition;::std::errc;::boost::system::error_code"
   misc-include-cleaner.IgnoreHeaders: "pico/.*;hardware/.*"

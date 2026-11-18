@@ -1,12 +1,10 @@
 ---
 # doctest's REQUIRE guards optional access in a way the analyzer can't see
 # tests feed deliberately invalid enum values and poke raw socket structs
-# doctest macros inflate the cognitive complexity of every test case
 InheritParentConfig: true
 Checks: >
   -bugprone-unchecked-optional-access,
   -clang-analyzer-optin.core.EnumCastOutOfRange,
-  -readability-function-cognitive-complexity,
   -cppcoreguidelines-pro-type-union-access,
   -cppcoreguidelines-pro-type-reinterpret-cast,
   -cppcoreguidelines-pro-bounds-constant-array-index

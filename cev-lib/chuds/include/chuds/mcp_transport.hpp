@@ -56,7 +56,6 @@ class Mcp251863Transport {
 
         // init needs the spi and pin setup above
         // filter 0 with an empty mask routes every standard-id frame to the rx fifo
-        // NOLINTNEXTLINE(cppcoreguidelines-prefer-member-initializer)
         static_cast<void>(retry_init());
     }
 
